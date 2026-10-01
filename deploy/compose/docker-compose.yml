@@ -20,6 +20,9 @@ x-flink-env: &flink-env
     s3.access-key: streamhouse
     s3.secret-key: streamhouse-secret
     table.exec.source.idle-timeout: 5s
+    table.catalog-store.kind: file
+    table.catalog-store.file.path: /opt/flink/catalogs
+    table.column-expansion-strategy: EXCLUDE_DEFAULT_VIRTUAL_METADATA_COLUMNS
 
 services:
   # ---------------------------------------------------------------- transport
@@ -161,7 +164,9 @@ services:
 
   # ---------------------------------------------------------------- transform
   jobmanager:
-    build: ./flink
+    build:
+      context: ../..
+      dockerfile: deploy/compose/flink/Dockerfile
     image: streamhouse/flink:2.1.3
     hostname: jobmanager
     command: jobmanager

@@ -5,3 +5,7 @@ target/
 .DS_Store
 .env
 .quarkus/
+demos/shop-assistant/config/*.env
+!demos/shop-assistant/config/oss.env
+.venv/
+__pycache__/

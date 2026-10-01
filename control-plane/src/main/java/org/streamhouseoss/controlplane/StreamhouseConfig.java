@@ -43,6 +43,13 @@ public interface StreamhouseConfig {
 
         @WithDefault("10s")
         Duration checkpointInterval();
+
+        /** Catalog exposing Kafka topics as tables (the flink-catalog module); statements run in it. */
+        @WithDefault("streamhouse")
+        String topicCatalog();
+
+        @WithDefault("local")
+        String topicDatabase();
     }
 
     /** Addresses rendered into connector and Flink configs; they are resolved inside the platform network. */

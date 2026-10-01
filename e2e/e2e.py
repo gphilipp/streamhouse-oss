@@ -172,7 +172,7 @@ def main():
           f"{latency:.2f}s" if latency is not None else "not visible after 60s")
 
     # 3. Iceberg: the same change lands in the lake (committed on Flink checkpoints).
-    catalog = ("CREATE CATALOG lake WITH ('type'='iceberg','catalog-type'='rest','uri'='http://gravitino:9001/iceberg/',"
+    catalog = ("CREATE CATALOG IF NOT EXISTS lake WITH ('type'='iceberg','catalog-type'='rest','uri'='http://gravitino:9001/iceberg/',"
                "'io-impl'='org.apache.iceberg.aws.s3.S3FileIO','s3.endpoint'='http://s3:8333','s3.path-style-access'='true',"
                "'s3.access-key-id'='streamhouse','s3.secret-access-key'='streamhouse-secret','client.region'='us-east-1')")
     iceberg_orders = None

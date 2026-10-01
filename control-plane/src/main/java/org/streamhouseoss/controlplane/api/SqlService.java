@@ -145,6 +145,11 @@ public class SqlService {
                             + "with backticks); known topics: " + String.join(", ", topology.producedTopics()));
                 }
             }
+            case Resource.Statement st -> {
+                if (st.sql().isBlank()) {
+                    throw new IllegalArgumentException("statement " + st.name() + " has no SQL");
+                }
+            }
             case Resource.IcebergTable it -> requireTopic(it.name(), topology);
             case Resource.ContextTable ct -> requireTopic(ct.name(), topology);
             case Resource.Grant g -> {
@@ -185,6 +190,7 @@ public class SqlService {
         List<String> producedTopics = switch (resource) {
             case Resource.Source s -> s.tables().stream().map(s::topicFor).toList();
             case Resource.MaterializedView mv -> List.of(mv.name());
+            case Resource.Statement st -> org.streamhouseoss.controlplane.reconcile.StatementReconciler.target(st.sql()).stream().toList();
             default -> List.of();
         };
         List<String> dependents = new ArrayList<>();
@@ -208,6 +214,8 @@ public class SqlService {
             Map<String, String> producers = new LinkedHashMap<>();
             topology.all(Resource.Source.class).forEach(s -> s.tables().forEach(t -> producers.put(s.topicFor(t), "source " + s.name())));
             topology.all(Resource.MaterializedView.class).forEach(mv -> producers.put(mv.name(), "materialized view " + mv.name()));
+            topology.all(Resource.Statement.class).forEach(st -> org.streamhouseoss.controlplane.reconcile.StatementReconciler
+                    .target(st.sql()).ifPresent(t -> producers.put(t, "statement " + st.name())));
             List<List<Object>> rows = topics.list().stream()
                     .filter(t -> !t.startsWith("_") && !t.startsWith("connect-") && !t.startsWith("__"))
                     .sorted()
@@ -249,6 +257,8 @@ public class SqlService {
             case Resource.Connection c -> List.of();
             case Resource.Source s -> s.tables().stream().map(t -> Edge.kafka(s.topicFor(t))).toList();
             case Resource.MaterializedView mv -> List.of(Edge.kafka(mv.name()));
+            case Resource.Statement st -> org.streamhouseoss.controlplane.reconcile.StatementReconciler.target(st.sql())
+                    .map(t -> List.of(Edge.kafka(t))).orElse(List.of());
             case Resource.IcebergTable it -> List.of(Edge.iceberg(ddl.namespace(), FlinkDdl.icebergTableFor(it.name())));
             case Resource.ContextTable ct -> List.of(Edge.context(ct.name()));
             case Resource.Grant g -> List.of(Edge.context(g.objectName()));
@@ -273,6 +283,7 @@ public class SqlService {
             case CONNECTION -> "connection";
             case SOURCE -> "source";
             case MATERIALIZED_VIEW -> "materialized view";
+            case STATEMENT -> "statement";
             case ICEBERG_TABLE -> "iceberg table";
             case CONTEXT_TABLE -> "context table";
             case GRANT -> "grant";

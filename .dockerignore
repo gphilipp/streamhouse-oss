@@ -1,0 +1,5 @@
+# Docker build context at the repository root is used only by the Flink image.
+*
+!deploy/compose/flink/
+!flink-catalog/target/streamhouse-flink-catalog-*.jar
+flink-catalog/target/original-*.jar

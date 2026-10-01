@@ -25,6 +25,8 @@ public final class TestConfig {
                     public String gatewayUrl() { return "http://localhost:8084"; }
                     public String jobmanagerUrl() { return "http://localhost:8081"; }
                     public Duration checkpointInterval() { return Duration.ofSeconds(10); }
+                    public String topicCatalog() { return "streamhouse"; }
+                    public String topicDatabase() { return "local"; }
                 };
             }
             public Internal internal() {

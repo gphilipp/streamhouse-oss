@@ -66,7 +66,7 @@ class SqlParserTest {
     @Test
     void alterTopicEnableAndDisable() {
         List<Statement> stmts = SqlParser.parseScript("""
-                -- Iceberg tables default to upsert
+                -- the Iceberg mode is inferred from the topic unless given
                 ALTER TOPIC shop.public.orders ENABLE ICEBERG;
                 ALTER TOPIC clicks ENABLE ICEBERG WITH (mode = 'append');
                 ALTER TOPIC customer_360 ENABLE CONTEXT WITH (description = 'Live per-customer state');
@@ -75,11 +75,29 @@ class SqlParserTest {
                 """);
 
         assertThat(stmts).extracting(s -> s instanceof Statement.Apply a ? a.resource() : s).containsExactly(
-                new Resource.IcebergTable("shop.public.orders", TableMode.UPSERT),
+                new Resource.IcebergTable("shop.public.orders", null),
                 new Resource.IcebergTable("clicks", TableMode.APPEND),
                 new Resource.ContextTable("customer_360", null, "Live per-customer state"),
                 new Resource.ContextTable("clicks", TableMode.APPEND, ""),
                 new Statement.Remove(ResourceKind.CONTEXT_TABLE, "clicks", true, "ALTER TOPIC clicks DISABLE CONTEXT"));
+    }
+
+    @Test
+    void statementsKeepFlinkSqlVerbatim() {
+        String sql = """
+                CREATE TABLE customer_360 (PRIMARY KEY (customer_key) NOT ENFORCED)
+                DISTRIBUTED BY HASH(customer_key) INTO 1 BUCKETS WITH ('key.format' = 'raw')
+                AS SELECT CAST(customer_id AS STRING) AS customer_key FROM `shop.public.customers`""";
+        List<Statement> stmts = SqlParser.parseScript("CREATE STATEMENT \"customer-360\" AS " + sql
+                + ";\nCREATE STATEMENT \"orders.as-upsert\" AS ALTER TABLE `shop.public.orders` SET ('changelog.mode' = 'upsert');"
+                + "\nDROP STATEMENT IF EXISTS \"customer-360\";\nSHOW STATEMENTS");
+
+        assertThat(((Statement.Apply) stmts.get(0)).resource()).isEqualTo(new Resource.Statement("customer-360", sql));
+        assertThat(stmts.get(2)).isEqualTo(new Statement.Remove(ResourceKind.STATEMENT, "customer-360", true,
+                "DROP STATEMENT IF EXISTS \"customer-360\""));
+        assertThat(stmts.get(3)).isEqualTo(new Statement.Show(ResourceKind.STATEMENT, "SHOW STATEMENTS"));
+        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE STATEMENT \"Bad_Name\" AS SELECT 1"))
+                .hasMessageContaining("invalid statement name: Bad_Name");
     }
 
     @Test

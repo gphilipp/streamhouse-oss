@@ -150,6 +150,6 @@ class SqlApiTest {
         given().contentType(ContentType.JSON).body(Map.of("sql", "SHOW SOURCES;\nCREATE SAUCE x"))
                 .post("/v1/sql").then().statusCode(400)
                 .body("line", equalTo(2))
-                .body("error", containsString("expected CONNECTION, SOURCE or MATERIALIZED VIEW"));
+                .body("error", containsString("expected CONNECTION, SOURCE, MATERIALIZED VIEW or STATEMENT"));
     }
 }

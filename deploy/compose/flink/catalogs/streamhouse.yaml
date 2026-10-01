@@ -1,0 +1,8 @@
+# Registered in every Flink session through the file catalog store (table.catalog-store.*).
+# The catalog is the "environment", its single database the "cluster"; tables are Kafka topics.
+type: streamhouse-kafka
+bootstrap.servers: kafka:9092
+schema-registry.url: http://apicurio:8080/apis/ccompat/v7
+default-database: local
+default.partitions: "6"
+default.replication-factor: "1"

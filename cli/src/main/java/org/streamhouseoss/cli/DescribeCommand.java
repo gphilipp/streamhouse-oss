@@ -10,7 +10,7 @@ import picocli.CommandLine.Parameters;
 @Command(name = "describe", description = "Show a resource's status, definition and lineage.")
 class DescribeCommand extends BaseCommand {
 
-    @Parameters(index = "0", paramLabel = "KIND", description = "connection, source, view, iceberg or context")
+    @Parameters(index = "0", paramLabel = "KIND", description = "connection, source, view, statement, iceberg or context")
     String kind;
 
     @Parameters(index = "1", paramLabel = "NAME")

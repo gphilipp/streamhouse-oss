@@ -68,11 +68,32 @@ public sealed interface Resource {
         }
     }
 
-    /** Continuous materialization of a topic into an Iceberg table. */
+    /**
+     * A named Flink SQL statement run against the topic catalog (Kafka topics are tables). Long-running
+     * statements (INSERT, CREATE TABLE ... AS SELECT) become jobs; others (ALTER TABLE ...) run once.
+     */
+    record Statement(String name, String sql) implements Resource {
+        public Statement {
+            if (name == null || !Names.STATEMENT.matcher(name).matches()) {
+                throw new IllegalArgumentException("invalid statement name: " + name
+                        + " (use lower-case letters, digits, dashes and dots)");
+            }
+            Objects.requireNonNull(sql, "sql");
+        }
+
+        @Override
+        public ResourceKind kind() {
+            return ResourceKind.STATEMENT;
+        }
+    }
+
+    /**
+     * Continuous materialization of a topic into an Iceberg table. A {@code null} mode means "infer
+     * from the topic": upsert for compacted (keyed) topics, append otherwise.
+     */
     record IcebergTable(String name, TableMode mode) implements Resource {
         public IcebergTable {
             requireTopicName(name);
-            Objects.requireNonNull(mode, "mode");
         }
 
         @Override

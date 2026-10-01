@@ -4,6 +4,8 @@
 #  - Iceberg (REST catalog served by Gravitino) + AWS bundle for S3FileIO against SeaweedFS
 #  - Hadoop client (Iceberg's Flink catalog loader needs org.apache.hadoop.conf.Configuration)
 #  - S3 filesystem plugin for checkpoints
+#  - the streamhouse topic catalog: every Kafka topic is a table (flink-catalog module)
+# Build context: the repository root (see /.dockerignore). Run `mvn -pl flink-catalog package` first.
 FROM apache/flink:2.1.3-java21
 
 ARG MAVEN=https://repo1.maven.org/maven2
@@ -25,3 +27,7 @@ RUN set -eux; \
     mkdir -p /opt/flink/plugins/s3-fs-hadoop; \
     cp /opt/flink/opt/flink-s3-fs-hadoop-$FLINK.jar /opt/flink/plugins/s3-fs-hadoop/; \
     chown -R flink:flink /opt/flink/lib /opt/flink/plugins
+
+# Topics as tables: the catalog jar, registered in every session via the file catalog store.
+COPY --chown=flink:flink flink-catalog/target/streamhouse-flink-catalog-*.jar /opt/flink/lib/
+COPY --chown=flink:flink deploy/compose/flink/catalogs/ /opt/flink/catalogs/

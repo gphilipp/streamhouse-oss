@@ -29,7 +29,7 @@ GRANT SELECT ON CONTEXT customer_360 TO ROLE support_agent;
 |---|---|---|
 | Capture | Debezium 3.7 on Kafka Connect | `CREATE CONNECTION` / `CREATE SOURCE` render and manage the connectors |
 | Transport | Apache Kafka 4.3 (KRaft), Apicurio Registry 3.3 | Topic lifecycle; Avro everywhere in the Confluent wire format |
-| Transform | Apache Flink 2.1 + SQL Gateway | `CREATE MATERIALIZED VIEW` becomes a managed Flink job writing an upsert topic |
+| Transform | Apache Flink 2.1 + SQL Gateway | A Flink catalog in which every Kafka topic is a table (`CREATE TABLE … AS SELECT` creates a topic); `CREATE MATERIALIZED VIEW` and `CREATE STATEMENT` run as managed Flink jobs |
 | Serve: analytics | Apache Iceberg 1.12 on SeaweedFS (S3) | `ENABLE ICEBERG` continuously lands any topic in an Iceberg table (append or upsert) |
 | Serve: real time | PostgreSQL 17 | **Context Engine**: an open counterpart of Confluent's Real-Time Context Engine. It materializes topics and answers *lightning queries* over REST and MCP |
 | Govern | Apache Gravitino 1.3, Keycloak 26 | OIDC everywhere, `GRANT`s enforced on every query, an audit log, lineage (stored and emitted as OpenLineage) |
@@ -57,11 +57,13 @@ Everything is Apache 2.0, except PostgreSQL, which uses the permissive PostgreSQ
 | `sql/` | Parser for the streamhouse DDL |
 | `model/` | Resource model shared by all services |
 | `control-plane/` | Quarkus service. Stores desired state in Postgres; reconcilers drive Kafka, Connect, Flink, Gravitino and the context engine |
+| `flink-catalog/` | Flink catalog exposing Kafka topics as tables ([details](docs/flink-topic-catalog.md)) |
 | `context-engine/` | Quarkus service. Exactly-once topic → Postgres materialization, lightning queries (a safe single-table SQL subset compiled with Apache Calcite), MCP server |
 | `cli/` | `shctl`: login, `sql -f`, `get`, `describe`, `query` |
 | `deploy/compose/` | The whole platform for a laptop (see its [README](deploy/compose/README.md) and [conventions](deploy/compose/CONVENTIONS.md)) |
 | `examples/ecommerce/` | Demo shop database, pipeline and order generator ([walkthrough](examples/ecommerce/README.md)) |
 | `e2e/` | End-to-end checks against the running platform |
+| `demos/shop-assistant/` | A Python demo that runs unchanged on this platform and on Confluent Cloud ([README](demos/shop-assistant/README.md)) |
 
 ## Quick start
 
@@ -88,6 +90,8 @@ claude mcp add --transport http streamhouse http://localhost:8082/mcp --header "
 
 Then ask: *"What is customer 42's lifetime value, and do they have open orders?"*. Tokens last one hour.
 
+Agents can also authenticate with an API key and secret instead of a token: send `Authorization: Basic base64(client_id:client_secret)` for a Keycloak client, for example `support-agent:support-agent-secret`. The context engine exchanges it for a token, and the same grants apply. This is the same scheme as Confluent's MCP endpoint.
+
 ## SQL reference
 
 ```sql
@@ -95,17 +99,20 @@ CREATE [OR REPLACE] CONNECTION name TYPE POSTGRES WITH (host = '…', port = '54
     user = '…', password = SECRET 'ref' [, publication = '…'])
 CREATE [OR REPLACE] SOURCE name FROM CONNECTION conn TABLES (schema.table, …)
 CREATE [OR REPLACE] MATERIALIZED VIEW name PRIMARY KEY (col, …) AS <Flink SQL query>
+CREATE [OR REPLACE] STATEMENT "name" AS <any Flink SQL statement, run in the topic catalog>
 ALTER TOPIC topic ENABLE ICEBERG [WITH (mode = 'upsert' | 'append')]
 ALTER TOPIC topic ENABLE CONTEXT [WITH (mode = 'upsert' | 'append', description = '…')]
 ALTER TOPIC topic DISABLE ICEBERG | CONTEXT
 GRANT | REVOKE SELECT ON CONTEXT topic TO | FROM ROLE role
-DROP CONNECTION | SOURCE | MATERIALIZED VIEW [IF EXISTS] name
-SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
-DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | ICEBERG | CONTEXT name
+DROP CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT [IF EXISTS] name
+SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | STATEMENTS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
+DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT | ICEBERG | CONTEXT name
 ```
 
 Rules and behaviors:
 - **Topics:** a source writes one topic per table, `<source>.<schema>.<table>`; a view writes a topic named after itself. In view queries, quote dotted topic names with backticks.
+- **Statements:** a statement runs in the topic catalog `streamhouse`.`local`. Statements that start a job (`INSERT INTO`, `CREATE TABLE … AS SELECT`) are kept running and resumed if their job stops; others (`ALTER TABLE …`) run once.
+- **Iceberg mode:** without `mode`, compacted topics become upsert tables and other topics append-only tables.
 - **Secrets:** `SECRET 'ref'` is resolved from the control plane's environment variable `STREAMHOUSE_SECRET_<REF>`. It is never stored.
 - **Statements describe desired state.** The control plane reconciles it continuously, and `shctl sql --wait` blocks until everything is `READY` or `FAILED`. Re-running a script is safe: unchanged resources are left alone, and re-applying a failed one retries it.
 - **Roles:** `admin` and `engineer` may change resources; only `admin` may grant. Everyone authenticated may `SHOW` and `DESCRIBE`.

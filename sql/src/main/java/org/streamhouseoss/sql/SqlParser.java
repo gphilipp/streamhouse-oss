@@ -23,14 +23,15 @@ import org.streamhouseoss.sql.Lexer.Type;
  * CREATE [OR REPLACE] CONNECTION name TYPE POSTGRES [WITH (key = 'v' | SECRET 'ref', ...)]
  * CREATE [OR REPLACE] SOURCE name FROM CONNECTION name TABLES (schema.table, ...)
  * CREATE [OR REPLACE] MATERIALIZED VIEW name PRIMARY KEY (col, ...) AS &lt;Flink SQL query&gt;
+ * CREATE [OR REPLACE] STATEMENT name AS &lt;Flink SQL statement&gt;
  * ALTER TOPIC topic ENABLE ICEBERG [WITH (mode = 'append' | 'upsert')]
  * ALTER TOPIC topic ENABLE CONTEXT [WITH (mode = ..., description = '...')]
  * ALTER TOPIC topic DISABLE ICEBERG | CONTEXT
  * GRANT SELECT ON CONTEXT topic TO ROLE role
  * REVOKE SELECT ON CONTEXT topic FROM ROLE role
- * DROP CONNECTION | SOURCE | MATERIALIZED VIEW [IF EXISTS] name
- * SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
- * DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | ICEBERG | CONTEXT name
+ * DROP CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT [IF EXISTS] name
+ * SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | STATEMENTS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
+ * DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT | ICEBERG | CONTEXT name
  * </pre>
  *
  * Unquoted identifiers are case-insensitive and normalized to lower case.
@@ -160,7 +161,15 @@ public final class SqlParser {
             Resource resource = build(nameToken, () -> new Resource.MaterializedView(name, primaryKey, query));
             return text -> new Statement.Apply(resource, replace, text);
         }
-        throw error(peek(), "expected CONNECTION, SOURCE or MATERIALIZED VIEW");
+        if (acceptWord("STATEMENT")) {
+            Token nameToken = peek();
+            String name = identifier();
+            expectWord("AS");
+            String sql = rawUntilEndOfStatement();
+            Resource resource = build(nameToken, () -> new Resource.Statement(name, sql));
+            return text -> new Statement.Apply(resource, replace, text);
+        }
+        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW or STATEMENT");
     }
 
     private StatementBuilder alterTopic() {
@@ -169,8 +178,8 @@ public final class SqlParser {
         String topic = topicName();
         if (acceptWord("ENABLE")) {
             if (acceptWord("ICEBERG")) {
-                Map<String, String> options = literalOptions(Map.of("mode", "upsert"), "mode");
-                TableMode mode = tableMode(topicToken, options.get("mode"));
+                Map<String, String> options = literalOptions(Map.of(), "mode");
+                TableMode mode = options.containsKey("mode") ? tableMode(topicToken, options.get("mode")) : null;
                 Resource resource = build(topicToken, () -> new Resource.IcebergTable(topic, mode));
                 return text -> new Statement.Apply(resource, true, text);
             }
@@ -226,8 +235,10 @@ public final class SqlParser {
         } else if (acceptWord("MATERIALIZED")) {
             expectWord("VIEW");
             kind = ResourceKind.MATERIALIZED_VIEW;
+        } else if (acceptWord("STATEMENT")) {
+            kind = ResourceKind.STATEMENT;
         } else {
-            throw error(peek(), "expected CONNECTION, SOURCE or MATERIALIZED VIEW");
+            throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW or STATEMENT");
         }
         boolean ifExists = false;
         if (acceptWord("IF")) {
@@ -250,6 +261,8 @@ public final class SqlParser {
         } else if (acceptWord("MATERIALIZED")) {
             expectWord("VIEWS");
             kind = ResourceKind.MATERIALIZED_VIEW;
+        } else if (acceptWord("STATEMENTS")) {
+            kind = ResourceKind.STATEMENT;
         } else if (acceptWord("ICEBERG")) {
             expectWord("TABLES");
             kind = ResourceKind.ICEBERG_TABLE;
@@ -259,7 +272,7 @@ public final class SqlParser {
         } else if (acceptWord("GRANTS")) {
             kind = ResourceKind.GRANT;
         } else {
-            throw error(peek(), "expected TOPICS, CONNECTIONS, SOURCES, MATERIALIZED VIEWS, ICEBERG TABLES, CONTEXT TABLES or GRANTS");
+            throw error(peek(), "expected TOPICS, CONNECTIONS, SOURCES, MATERIALIZED VIEWS, STATEMENTS, ICEBERG TABLES, CONTEXT TABLES or GRANTS");
         }
         return text -> new Statement.Show(kind, text);
     }
@@ -275,13 +288,16 @@ public final class SqlParser {
             expectWord("VIEW");
             return ResourceKind.MATERIALIZED_VIEW;
         }
+        if (acceptWord("STATEMENT")) {
+            return ResourceKind.STATEMENT;
+        }
         if (acceptWord("ICEBERG")) {
             return ResourceKind.ICEBERG_TABLE;
         }
         if (acceptWord("CONTEXT")) {
             return ResourceKind.CONTEXT_TABLE;
         }
-        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW, ICEBERG or CONTEXT");
+        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW, STATEMENT, ICEBERG or CONTEXT");
     }
 
     private Privilege privilege() {

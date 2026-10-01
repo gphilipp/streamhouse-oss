@@ -148,7 +148,7 @@ public class FlinkDdl {
         options.put("s3.access-key-id", internal.s3AccessKey());
         options.put("s3.secret-access-key", internal.s3SecretKey());
         options.put("client.region", internal.s3Region());
-        return "CREATE CATALOG " + LAKE + " WITH (" + options(options) + ")";
+        return "CREATE CATALOG IF NOT EXISTS " + LAKE + " WITH (" + options(options) + ")";
     }
 
     public String icebergNamespace() {

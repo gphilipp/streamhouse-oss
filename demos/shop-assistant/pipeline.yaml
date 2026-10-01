@@ -1,0 +1,78 @@
+# The shop-assistant pipeline, written once for every platform.
+#
+# - source: Postgres tables captured by CDC, one topic per table: <name>.<schema>.<table>
+# - statements: Flink SQL in the Confluent Cloud for Apache Flink dialect (Kafka topics are
+#   tables; CREATE TABLE ... AS SELECT creates a topic and a continuous query). Statement names
+#   use [a-z0-9-] only.
+# - iceberg: topics to expose as Iceberg tables
+# - context: topics to serve as real-time context to AI agents over MCP. Names are
+#   [a-zA-Z][a-zA-Z0-9_]* and the topics have raw (string) keys, as the strictest platform requires.
+
+source:
+  name: shop
+  tables: [public.customers, public.orders, public.products, public.inventory]
+
+statements:
+  # CDC topics carry the latest row per key; read them as upsert changelogs.
+  - name: shop-customers-as-upsert
+    sql: ALTER TABLE `shop.public.customers` SET ('changelog.mode' = 'upsert')
+  - name: shop-orders-as-upsert
+    sql: ALTER TABLE `shop.public.orders` SET ('changelog.mode' = 'upsert')
+  - name: shop-products-as-upsert
+    sql: ALTER TABLE `shop.public.products` SET ('changelog.mode' = 'upsert')
+  - name: shop-inventory-as-upsert
+    sql: ALTER TABLE `shop.public.inventory` SET ('changelog.mode' = 'upsert')
+
+  - name: customer-360
+    sql: |
+      CREATE TABLE customer_360 (
+        PRIMARY KEY (customer_key) NOT ENFORCED
+      ) DISTRIBUTED BY HASH(customer_key) INTO 1 BUCKETS
+      WITH ('changelog.mode' = 'upsert', 'key.format' = 'raw', 'kafka.cleanup-policy' = 'compact')
+      AS SELECT
+        CAST(c.customer_id AS STRING) AS customer_key,
+        c.customer_id,
+        c.first_name || ' ' || c.last_name AS name,
+        c.email,
+        c.country,
+        c.tier,
+        COUNT(o.order_id) AS orders,
+        COALESCE(SUM(CASE WHEN o.status <> 'cancelled' THEN o.total END), 0) AS lifetime_value,
+        SUM(CASE WHEN o.status = 'open' THEN 1 ELSE 0 END) AS open_orders,
+        MAX(o.created_at) AS last_order_at
+      FROM `shop.public.customers` AS c
+      LEFT JOIN `shop.public.orders` AS o ON o.customer_id = c.customer_id
+      GROUP BY c.customer_id, c.first_name, c.last_name, c.email, c.country, c.tier
+
+  - name: inventory-live
+    sql: |
+      CREATE TABLE inventory_live (
+        PRIMARY KEY (product_key) NOT ENFORCED
+      ) DISTRIBUTED BY HASH(product_key) INTO 1 BUCKETS
+      WITH ('changelog.mode' = 'upsert', 'key.format' = 'raw', 'kafka.cleanup-policy' = 'compact')
+      AS SELECT
+        CAST(p.product_id AS STRING) AS product_key,
+        p.product_id,
+        p.sku,
+        p.name,
+        p.category,
+        p.price,
+        i.on_hand,
+        i.reserved,
+        i.on_hand - i.reserved AS available,
+        i.on_hand - i.reserved <= 5 AS low_stock,
+        i.updated_at
+      FROM `shop.public.products` AS p
+      JOIN `shop.public.inventory` AS i ON i.product_id = p.product_id
+
+iceberg: [customer_360, inventory_live]
+
+context:
+  - topic: customer_360
+    description: >-
+      One row per customer: customer_id, name, email, country, tier, number of orders, lifetime
+      value (excluding cancelled orders), open orders and the time of the last order.
+  - topic: inventory_live
+    description: >-
+      One row per product: product_id, sku, name, category, price, stock on hand, reserved and
+      available units, and low_stock (5 units or fewer available).

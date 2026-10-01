@@ -13,6 +13,7 @@ import java.util.concurrent.TimeoutException;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
@@ -47,6 +48,14 @@ public class KafkaTopics {
 
     public boolean exists(String topic) {
         return list().contains(topic);
+    }
+
+    /** Whether the topic keeps only the latest record per key (cleanup.policy contains compact). */
+    public boolean compacted(String topic) {
+        ConfigResource resource = new ConfigResource(ConfigResource.Type.TOPIC, topic);
+        String policy = get(admin.describeConfigs(List.of(resource)).all()).get(resource)
+                .get(TopicConfig.CLEANUP_POLICY_CONFIG).value();
+        return policy != null && policy.contains(TopicConfig.CLEANUP_POLICY_COMPACT);
     }
 
     /** Creates a topic if it does not exist yet. Returns true when it was created. */

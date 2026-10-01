@@ -53,7 +53,7 @@ docker compose -f deploy/compose/docker-compose.yml exec jobmanager ./bin/sql-cl
 Then, in the SQL client, register the catalog and query in batch mode:
 
 ```sql
-CREATE CATALOG lake WITH ('type'='iceberg', 'catalog-type'='rest', 'uri'='http://gravitino:9001/iceberg/',
+CREATE CATALOG IF NOT EXISTS lake WITH ('type'='iceberg', 'catalog-type'='rest', 'uri'='http://gravitino:9001/iceberg/',
   'io-impl'='org.apache.iceberg.aws.s3.S3FileIO', 's3.endpoint'='http://s3:8333', 's3.path-style-access'='true',
   's3.access-key-id'='streamhouse', 's3.secret-access-key'='streamhouse-secret', 'client.region'='us-east-1');
 SET 'execution.runtime-mode' = 'batch';

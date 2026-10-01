@@ -35,6 +35,7 @@ public record Topology(List<StoredResource> resources) {
         Set<String> topics = new LinkedHashSet<>();
         all(Resource.Source.class).forEach(s -> s.tables().forEach(t -> topics.add(s.topicFor(t))));
         all(Resource.MaterializedView.class).forEach(mv -> topics.add(mv.name()));
+        all(Resource.Statement.class).forEach(st -> StatementReconciler.target(st.sql()).ifPresent(topics::add));
         return topics;
     }
 
@@ -51,6 +52,7 @@ public record Topology(List<StoredResource> resources) {
     public List<StoredResource> consumersOf(String topic) {
         return resources.stream().filter(r -> switch (r.resource()) {
             case Resource.MaterializedView mv -> referencedTopics(mv.query(), mv.name()).contains(topic);
+            case Resource.Statement st -> referencedTopics(st.sql(), StatementReconciler.target(st.sql()).orElse(null)).contains(topic);
             case Resource.IcebergTable it -> it.name().equals(topic);
             case Resource.ContextTable ct -> ct.name().equals(topic);
             default -> false;

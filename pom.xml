@@ -24,6 +24,7 @@
     <module>context-engine</module>
     <module>control-plane</module>
     <module>cli</module>
+    <module>flink-catalog</module>
   </modules>
 
   <properties>

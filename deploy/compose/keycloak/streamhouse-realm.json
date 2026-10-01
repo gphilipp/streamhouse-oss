@@ -1,0 +1,106 @@
+{
+  "realm": "streamhouse",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 3600,
+  "oauth2DeviceCodeLifespan": 600,
+  "oauth2DevicePollingInterval": 5,
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Full control of the streamhouse" },
+      { "name": "engineer", "description": "Create and manage pipelines" },
+      { "name": "support_agent", "description": "AI support agent: reads granted context tables" }
+    ]
+  },
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@streamhouse.local",
+      "emailVerified": true,
+      "firstName": "Stream",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "admin", "temporary": false }],
+      "realmRoles": ["admin", "default-roles-streamhouse"]
+    },
+    {
+      "username": "engineer",
+      "enabled": true,
+      "email": "engineer@streamhouse.local",
+      "emailVerified": true,
+      "firstName": "Data",
+      "lastName": "Engineer",
+      "credentials": [{ "type": "password", "value": "engineer", "temporary": false }],
+      "realmRoles": ["engineer", "default-roles-streamhouse"]
+    },
+    {
+      "username": "service-account-support-agent",
+      "enabled": true,
+      "serviceAccountClientId": "support-agent",
+      "realmRoles": ["support_agent", "default-roles-streamhouse"]
+    },
+    {
+      "username": "service-account-untrusted-agent",
+      "enabled": true,
+      "serviceAccountClientId": "untrusted-agent",
+      "realmRoles": ["default-roles-streamhouse"]
+    },
+    {
+      "username": "service-account-control-plane",
+      "enabled": true,
+      "serviceAccountClientId": "control-plane",
+      "realmRoles": ["admin", "default-roles-streamhouse"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "shctl",
+      "name": "Streamhouse CLI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true"
+      }
+    },
+    {
+      "clientId": "support-agent",
+      "name": "Support AI agent",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "support-agent-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "untrusted-agent",
+      "name": "Agent without grants (denial tests)",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "untrusted-agent-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    },
+    {
+      "clientId": "control-plane",
+      "name": "Streamhouse control plane",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "control-plane-secret",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "identities": [
+    {
+      "name": "streamhouse",
+      "credentials": [
+        { "accessKey": "streamhouse", "secretKey": "streamhouse-secret" }
+      ],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

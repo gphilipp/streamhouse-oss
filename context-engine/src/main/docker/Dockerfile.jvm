@@ -1,0 +1,11 @@
+# Build the application first: mvn -pl context-engine -am package -DskipTests
+FROM eclipse-temurin:21-jre
+WORKDIR /deployments
+COPY target/quarkus-app/lib/ lib/
+COPY target/quarkus-app/*.jar ./
+COPY target/quarkus-app/app/ app/
+COPY target/quarkus-app/quarkus/ quarkus/
+USER 1001
+EXPOSE 8082
+ENV JAVA_OPTS_APPEND="-XX:MaxRAMPercentage=75"
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS_APPEND -jar quarkus-run.jar"]

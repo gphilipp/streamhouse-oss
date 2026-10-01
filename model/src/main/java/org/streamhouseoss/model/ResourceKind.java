@@ -4,7 +4,7 @@ public enum ResourceKind {
     CONNECTION,
     SOURCE,
     MATERIALIZED_VIEW,
-    TABLEFLOW,
+    ICEBERG_TABLE,
     CONTEXT_TABLE,
     GRANT
 }

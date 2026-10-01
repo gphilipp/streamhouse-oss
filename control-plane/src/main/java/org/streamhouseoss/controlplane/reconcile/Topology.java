@@ -51,7 +51,7 @@ public record Topology(List<StoredResource> resources) {
     public List<StoredResource> consumersOf(String topic) {
         return resources.stream().filter(r -> switch (r.resource()) {
             case Resource.MaterializedView mv -> referencedTopics(mv.query(), mv.name()).contains(topic);
-            case Resource.Tableflow tf -> tf.name().equals(topic);
+            case Resource.IcebergTable it -> it.name().equals(topic);
             case Resource.ContextTable ct -> ct.name().equals(topic);
             default -> false;
         }).toList();

@@ -52,12 +52,12 @@ class SqlApiTest {
     void appliesAScriptInOrder() {
         JsonPath result = sql(CONNECTION + ";\n" + SOURCE + ";\n" + VIEW + ";\n"
                 + "ALTER TOPIC open_orders ENABLE CONTEXT WITH (description = 'Open orders per customer');\n"
-                + "ALTER TOPIC shop.public.orders ENABLE TABLEFLOW WITH (mode = 'append');");
+                + "ALTER TOPIC shop.public.orders ENABLE ICEBERG WITH (mode = 'append');");
 
         assertThat(result.getBoolean("ok")).isTrue();
         assertThat(result.getList("results.message", String.class)).containsExactly(
                 "connection shop_pg created", "source shop created", "materialized view open_orders created",
-                "context table open_orders created", "tableflow shop.public.orders created");
+                "context table open_orders created", "iceberg table shop.public.orders created");
         org.mockito.Mockito.verify(loop, org.mockito.Mockito.atLeastOnce()).trigger();
 
         given().get("/v1/resources").then().statusCode(200)
@@ -104,7 +104,7 @@ class SqlApiTest {
         JsonPath result = sql("DROP SOURCE shop");
 
         assertThat(result.getString("results[0].message"))
-                .isEqualTo("cannot drop source shop: used by materialized view open_orders, tableflow shop.public.orders");
+                .isEqualTo("cannot drop source shop: used by iceberg table shop.public.orders, materialized view open_orders");
         assertThat(sql("DROP MATERIALIZED VIEW IF EXISTS nope").getString("results[0].message")).contains("nothing to do");
     }
 

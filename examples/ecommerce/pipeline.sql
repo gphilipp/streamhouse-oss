@@ -54,10 +54,10 @@ JOIN `shop.public.inventory` AS i ON i.product_id = p.product_id;
 
 -- Serve: analytics (Iceberg) -----------------------------------------------------------------
 
-ALTER TOPIC customer_360 ENABLE TABLEFLOW;
-ALTER TOPIC inventory_live ENABLE TABLEFLOW;
+ALTER TOPIC customer_360 ENABLE ICEBERG;
+ALTER TOPIC inventory_live ENABLE ICEBERG;
 -- Every order change, as history.
-ALTER TOPIC shop.public.orders ENABLE TABLEFLOW WITH (mode = 'append');
+ALTER TOPIC shop.public.orders ENABLE ICEBERG WITH (mode = 'append');
 
 -- Serve: real-time context for apps and agents ------------------------------------------------
 

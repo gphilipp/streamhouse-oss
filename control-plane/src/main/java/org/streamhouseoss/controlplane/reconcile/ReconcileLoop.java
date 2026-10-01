@@ -39,7 +39,7 @@ public class ReconcileLoop {
     static final Duration FAILURE_BACKOFF = Duration.ofSeconds(30);
 
     private static final List<ResourceKind> ORDER = List.of(ResourceKind.CONNECTION, ResourceKind.SOURCE,
-            ResourceKind.MATERIALIZED_VIEW, ResourceKind.TABLEFLOW, ResourceKind.CONTEXT_TABLE, ResourceKind.GRANT);
+            ResourceKind.MATERIALIZED_VIEW, ResourceKind.ICEBERG_TABLE, ResourceKind.CONTEXT_TABLE, ResourceKind.GRANT);
 
     private final DesiredState state;
     private final Gravitino gravitino;

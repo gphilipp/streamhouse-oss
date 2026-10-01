@@ -12,7 +12,7 @@ import picocli.CommandLine.Parameters;
 class GetCommand extends BaseCommand {
 
     @Parameters(arity = "0..1", paramLabel = "KIND",
-            description = "connection, source, materialized_view, tableflow, context_table or grant (default: all)")
+            description = "connection, source, materialized_view, iceberg_table, context_table or grant (default: all)")
     String kind;
 
     @Override

@@ -23,7 +23,7 @@ class TopologyTest {
                     List.of(new TableRef("public", "orders"), new TableRef("public", "orders_archive"))), false),
             stored(new Resource.MaterializedView("order_stats", List.of("status"),
                     "SELECT status, COUNT(*) AS n FROM `shop.public.orders` GROUP BY status"), false),
-            stored(new Resource.Tableflow("order_stats", TableMode.UPSERT), false),
+            stored(new Resource.IcebergTable("order_stats", TableMode.UPSERT), false),
             stored(new Resource.MaterializedView("dropped_view", List.of("id"), "SELECT 1 AS id FROM order_stats"), true)));
 
     @Test
@@ -44,6 +44,6 @@ class TopologyTest {
     @Test
     void consumersOfATopic() {
         assertThat(topology.consumersOf("shop.public.orders")).extracting(StoredResource::name).containsExactly("order_stats");
-        assertThat(topology.consumersOf("order_stats")).extracting(r -> r.kind().name()).containsExactly("TABLEFLOW");
+        assertThat(topology.consumersOf("order_stats")).extracting(r -> r.kind().name()).containsExactly("ICEBERG_TABLE");
     }
 }

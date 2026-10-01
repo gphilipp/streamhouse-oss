@@ -23,14 +23,14 @@ import org.streamhouseoss.sql.Lexer.Type;
  * CREATE [OR REPLACE] CONNECTION name TYPE POSTGRES [WITH (key = 'v' | SECRET 'ref', ...)]
  * CREATE [OR REPLACE] SOURCE name FROM CONNECTION name TABLES (schema.table, ...)
  * CREATE [OR REPLACE] MATERIALIZED VIEW name PRIMARY KEY (col, ...) AS &lt;Flink SQL query&gt;
- * ALTER TOPIC topic ENABLE TABLEFLOW [WITH (mode = 'append' | 'upsert')]
+ * ALTER TOPIC topic ENABLE ICEBERG [WITH (mode = 'append' | 'upsert')]
  * ALTER TOPIC topic ENABLE CONTEXT [WITH (mode = ..., description = '...')]
- * ALTER TOPIC topic DISABLE TABLEFLOW | CONTEXT
+ * ALTER TOPIC topic DISABLE ICEBERG | CONTEXT
  * GRANT SELECT ON CONTEXT topic TO ROLE role
  * REVOKE SELECT ON CONTEXT topic FROM ROLE role
  * DROP CONNECTION | SOURCE | MATERIALIZED VIEW [IF EXISTS] name
- * SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | TABLEFLOWS | CONTEXT TABLES | GRANTS
- * DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | TABLEFLOW | CONTEXT name
+ * SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
+ * DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | ICEBERG | CONTEXT name
  * </pre>
  *
  * Unquoted identifiers are case-insensitive and normalized to lower case.
@@ -100,7 +100,7 @@ public final class SqlParser {
         }
         if (acceptWord("DESCRIBE")) {
             ResourceKind kind = objectKind();
-            String name = kind == ResourceKind.TABLEFLOW || kind == ResourceKind.CONTEXT_TABLE ? topicName() : identifier();
+            String name = kind == ResourceKind.ICEBERG_TABLE || kind == ResourceKind.CONTEXT_TABLE ? topicName() : identifier();
             return text -> new Statement.Describe(kind, name, text);
         }
         throw error(t, "expected CREATE, ALTER, GRANT, REVOKE, DROP, SHOW or DESCRIBE");
@@ -168,10 +168,10 @@ public final class SqlParser {
         Token topicToken = peek();
         String topic = topicName();
         if (acceptWord("ENABLE")) {
-            if (acceptWord("TABLEFLOW")) {
+            if (acceptWord("ICEBERG")) {
                 Map<String, String> options = literalOptions(Map.of("mode", "upsert"), "mode");
                 TableMode mode = tableMode(topicToken, options.get("mode"));
-                Resource resource = build(topicToken, () -> new Resource.Tableflow(topic, mode));
+                Resource resource = build(topicToken, () -> new Resource.IcebergTable(topic, mode));
                 return text -> new Statement.Apply(resource, true, text);
             }
             expectWord("CONTEXT");
@@ -182,8 +182,8 @@ public final class SqlParser {
         }
         expectWord("DISABLE");
         ResourceKind kind;
-        if (acceptWord("TABLEFLOW")) {
-            kind = ResourceKind.TABLEFLOW;
+        if (acceptWord("ICEBERG")) {
+            kind = ResourceKind.ICEBERG_TABLE;
         } else {
             expectWord("CONTEXT");
             kind = ResourceKind.CONTEXT_TABLE;
@@ -250,15 +250,16 @@ public final class SqlParser {
         } else if (acceptWord("MATERIALIZED")) {
             expectWord("VIEWS");
             kind = ResourceKind.MATERIALIZED_VIEW;
-        } else if (acceptWord("TABLEFLOWS")) {
-            kind = ResourceKind.TABLEFLOW;
+        } else if (acceptWord("ICEBERG")) {
+            expectWord("TABLES");
+            kind = ResourceKind.ICEBERG_TABLE;
         } else if (acceptWord("CONTEXT")) {
             expectWord("TABLES");
             kind = ResourceKind.CONTEXT_TABLE;
         } else if (acceptWord("GRANTS")) {
             kind = ResourceKind.GRANT;
         } else {
-            throw error(peek(), "expected TOPICS, CONNECTIONS, SOURCES, MATERIALIZED VIEWS, TABLEFLOWS, CONTEXT TABLES or GRANTS");
+            throw error(peek(), "expected TOPICS, CONNECTIONS, SOURCES, MATERIALIZED VIEWS, ICEBERG TABLES, CONTEXT TABLES or GRANTS");
         }
         return text -> new Statement.Show(kind, text);
     }
@@ -274,13 +275,13 @@ public final class SqlParser {
             expectWord("VIEW");
             return ResourceKind.MATERIALIZED_VIEW;
         }
-        if (acceptWord("TABLEFLOW")) {
-            return ResourceKind.TABLEFLOW;
+        if (acceptWord("ICEBERG")) {
+            return ResourceKind.ICEBERG_TABLE;
         }
         if (acceptWord("CONTEXT")) {
             return ResourceKind.CONTEXT_TABLE;
         }
-        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW, TABLEFLOW or CONTEXT");
+        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW, ICEBERG or CONTEXT");
     }
 
     private Privilege privilege() {

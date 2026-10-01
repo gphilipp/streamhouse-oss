@@ -69,15 +69,15 @@ public sealed interface Resource {
     }
 
     /** Continuous materialization of a topic into an Iceberg table. */
-    record Tableflow(String name, TableMode mode) implements Resource {
-        public Tableflow {
+    record IcebergTable(String name, TableMode mode) implements Resource {
+        public IcebergTable {
             requireTopicName(name);
             Objects.requireNonNull(mode, "mode");
         }
 
         @Override
         public ResourceKind kind() {
-            return ResourceKind.TABLEFLOW;
+            return ResourceKind.ICEBERG_TABLE;
         }
     }
 

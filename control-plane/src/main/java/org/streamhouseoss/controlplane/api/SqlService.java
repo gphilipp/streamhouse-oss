@@ -145,7 +145,7 @@ public class SqlService {
                             + "with backticks); known topics: " + String.join(", ", topology.producedTopics()));
                 }
             }
-            case Resource.Tableflow tf -> requireTopic(tf.name(), topology);
+            case Resource.IcebergTable it -> requireTopic(it.name(), topology);
             case Resource.ContextTable ct -> requireTopic(ct.name(), topology);
             case Resource.Grant g -> {
                 if (topology.find(ResourceKind.CONTEXT_TABLE, g.objectName()).isEmpty()) {
@@ -249,7 +249,7 @@ public class SqlService {
             case Resource.Connection c -> List.of();
             case Resource.Source s -> s.tables().stream().map(t -> Edge.kafka(s.topicFor(t))).toList();
             case Resource.MaterializedView mv -> List.of(Edge.kafka(mv.name()));
-            case Resource.Tableflow tf -> List.of(Edge.iceberg(ddl.namespace(), FlinkDdl.icebergTableFor(tf.name())));
+            case Resource.IcebergTable it -> List.of(Edge.iceberg(ddl.namespace(), FlinkDdl.icebergTableFor(it.name())));
             case Resource.ContextTable ct -> List.of(Edge.context(ct.name()));
             case Resource.Grant g -> List.of(Edge.context(g.objectName()));
         };
@@ -273,7 +273,7 @@ public class SqlService {
             case CONNECTION -> "connection";
             case SOURCE -> "source";
             case MATERIALIZED_VIEW -> "materialized view";
-            case TABLEFLOW -> "tableflow";
+            case ICEBERG_TABLE -> "iceberg table";
             case CONTEXT_TABLE -> "context table";
             case GRANT -> "grant";
         };

@@ -23,7 +23,7 @@ It also creates the `debezium` replication user and the `streamhouse` publicatio
 | `CREATE SOURCE shop …` | A Debezium connector; topics `shop.public.customers`, `…orders`, `…products`, `…inventory` |
 | `CREATE MATERIALIZED VIEW customer_360` | A Flink job: customers joined with their orders, aggregated per customer |
 | `CREATE MATERIALIZED VIEW inventory_live` | A Flink job: products joined with stock, with `available` and `low_stock` |
-| `ALTER TOPIC … ENABLE TABLEFLOW` | Iceberg tables `lake.streamhouse.customer_360`, `inventory_live` (upsert) and `shop_public_orders` (append history) |
+| `ALTER TOPIC … ENABLE ICEBERG` | Iceberg tables `lake.streamhouse.customer_360`, `inventory_live` (upsert) and `shop_public_orders` (append history) |
 | `ALTER TOPIC … ENABLE CONTEXT` | Context tables for lightning queries and MCP |
 | `GRANT SELECT ON CONTEXT … TO ROLE support_agent` | What the support agent may read |
 

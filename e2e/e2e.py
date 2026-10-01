@@ -4,7 +4,7 @@
 Assumes the stack is running (make up). Applies the e-commerce pipeline and checks that:
   1. every resource becomes READY;
   2. an order inserted in the shop database is visible in the context engine within seconds;
-  3. the change lands in the Iceberg table written by Tableflow;
+  3. the change lands in the Iceberg table materialized from the topic;
   4. lineage links the shop database to the context table;
   5. agents can use the MCP tools, and only for tables they were granted;
   6. every query, allowed or denied, is audited.
@@ -171,7 +171,7 @@ def main():
           latency is not None and latency <= FRESHNESS_BUDGET_S,
           f"{latency:.2f}s" if latency is not None else "not visible after 60s")
 
-    # 3. Tableflow: the same change lands in Iceberg (committed on Flink checkpoints).
+    # 3. Iceberg: the same change lands in the lake (committed on Flink checkpoints).
     catalog = ("CREATE CATALOG lake WITH ('type'='iceberg','catalog-type'='rest','uri'='http://gravitino:9001/iceberg/',"
                "'io-impl'='org.apache.iceberg.aws.s3.S3FileIO','s3.endpoint'='http://s3:8333','s3.path-style-access'='true',"
                "'s3.access-key-id'='streamhouse','s3.secret-access-key'='streamhouse-secret','client.region'='us-east-1')")

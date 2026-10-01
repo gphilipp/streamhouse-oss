@@ -26,7 +26,7 @@ public interface StreamhouseConfig {
     @WithDefault("streamhouse")
     String metalake();
 
-    /** Iceberg namespace that Tableflow tables are created in. */
+    /** Iceberg namespace that topics are materialized into. */
     @WithDefault("streamhouse")
     String icebergNamespace();
 

@@ -18,12 +18,12 @@ import org.streamhouseoss.model.TableMode;
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Tableflow continuously lands a topic in an Iceberg table registered in the Gravitino Iceberg
+ * Continuously lands a topic in an Iceberg table registered in the Gravitino Iceberg
  * REST catalog: every event in append mode, the latest row per key (equality deletes) in upsert
  * mode. Commits happen on Flink checkpoints. Disabling stops the job and keeps the table.
  */
 @ApplicationScoped
-public class TableflowReconciler implements Reconciler {
+public class IcebergTableReconciler implements Reconciler {
 
     private final FlinkGateway gateway;
     private final FlinkJobSupport jobs;
@@ -31,7 +31,7 @@ public class TableflowReconciler implements Reconciler {
     private final TopicSchemas schemas;
     private final KafkaTopics topics;
 
-    public TableflowReconciler(FlinkGateway gateway, FlinkJobSupport jobs, FlinkDdl ddl, TopicSchemas schemas, KafkaTopics topics) {
+    public IcebergTableReconciler(FlinkGateway gateway, FlinkJobSupport jobs, FlinkDdl ddl, TopicSchemas schemas, KafkaTopics topics) {
         this.gateway = gateway;
         this.jobs = jobs;
         this.ddl = ddl;
@@ -41,19 +41,19 @@ public class TableflowReconciler implements Reconciler {
 
     @Override
     public ResourceKind kind() {
-        return ResourceKind.TABLEFLOW;
+        return ResourceKind.ICEBERG_TABLE;
     }
 
     static String prefix(String topic) {
-        return "tableflow-" + topic + "-";
+        return "iceberg-" + topic + "-";
     }
 
     @Override
     public Outcome reconcile(StoredResource stored, Topology topology) {
-        Resource.Tableflow tableflow = (Resource.Tableflow) stored.resource();
-        String topic = tableflow.name();
+        Resource.IcebergTable iceberg = (Resource.IcebergTable) stored.resource();
+        String topic = iceberg.name();
         String table = FlinkDdl.icebergTableFor(topic);
-        String mode = tableflow.mode().name().toLowerCase(Locale.ROOT);
+        String mode = iceberg.mode().name().toLowerCase(Locale.ROOT);
         String jobName = prefix(topic) + mode;
         Map<String, Object> details = Map.of("job", jobName, "table", ddl.namespace() + "." + table, "mode", mode);
 
@@ -71,7 +71,7 @@ public class TableflowReconciler implements Reconciler {
         if (schema.isEmpty()) {
             return Outcome.pending("waiting for the schema of topic " + topic + " (has it received data yet?)");
         }
-        boolean upsert = tableflow.mode() == TableMode.UPSERT;
+        boolean upsert = iceberg.mode() == TableMode.UPSERT;
         List<String> keys = schema.get().keyFields();
         if (upsert && keys.isEmpty()) {
             return Outcome.failed("upsert mode needs a keyed topic with an Avro key schema; use WITH (mode = 'append')");
@@ -104,6 +104,6 @@ public class TableflowReconciler implements Reconciler {
     public List<Edge> lineage(Resource resource, Topology topology) {
         String topic = resource.name();
         return List.of(new Edge(Edge.kafka(topic), Edge.iceberg(ddl.namespace(), FlinkDdl.icebergTableFor(topic)),
-                ResourceKind.TABLEFLOW, topic));
+                ResourceKind.ICEBERG_TABLE, topic));
     }
 }

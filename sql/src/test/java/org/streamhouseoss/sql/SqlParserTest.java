@@ -66,17 +66,17 @@ class SqlParserTest {
     @Test
     void alterTopicEnableAndDisable() {
         List<Statement> stmts = SqlParser.parseScript("""
-                -- tableflow defaults to upsert
-                ALTER TOPIC shop.public.orders ENABLE TABLEFLOW;
-                ALTER TOPIC clicks ENABLE TABLEFLOW WITH (mode = 'append');
+                -- Iceberg tables default to upsert
+                ALTER TOPIC shop.public.orders ENABLE ICEBERG;
+                ALTER TOPIC clicks ENABLE ICEBERG WITH (mode = 'append');
                 ALTER TOPIC customer_360 ENABLE CONTEXT WITH (description = 'Live per-customer state');
                 ALTER TOPIC clicks ENABLE CONTEXT WITH (mode = 'append');
                 ALTER TOPIC clicks DISABLE CONTEXT;
                 """);
 
         assertThat(stmts).extracting(s -> s instanceof Statement.Apply a ? a.resource() : s).containsExactly(
-                new Resource.Tableflow("shop.public.orders", TableMode.UPSERT),
-                new Resource.Tableflow("clicks", TableMode.APPEND),
+                new Resource.IcebergTable("shop.public.orders", TableMode.UPSERT),
+                new Resource.IcebergTable("clicks", TableMode.APPEND),
                 new Resource.ContextTable("customer_360", null, "Live per-customer state"),
                 new Resource.ContextTable("clicks", TableMode.APPEND, ""),
                 new Statement.Remove(ResourceKind.CONTEXT_TABLE, "clicks", true, "ALTER TOPIC clicks DISABLE CONTEXT"));
@@ -122,7 +122,7 @@ class SqlParserTest {
         assertThatThrownBy(() -> SqlParser.parseScript("SHOW TOPICS;\nCREATE SOURCE s FROM shop_pg TABLES (public.t)"))
                 .isInstanceOf(SqlParseException.class)
                 .hasMessage("line 2: expected CONNECTION (found 'shop_pg')");
-        assertThatThrownBy(() -> SqlParser.parseStatement("ALTER TOPIC t ENABLE TABLEFLOW WITH (mode = 'merge')"))
+        assertThatThrownBy(() -> SqlParser.parseStatement("ALTER TOPIC t ENABLE ICEBERG WITH (mode = 'merge')"))
                 .hasMessageContaining("mode must be 'append' or 'upsert'");
         assertThatThrownBy(() -> SqlParser.parseStatement("ALTER TOPIC t ENABLE CONTEXT WITH (colour = 'red')"))
                 .hasMessageContaining("unknown option colour");

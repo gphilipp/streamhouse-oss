@@ -14,7 +14,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 /**
  * Registers the platform in Gravitino: the metalake, a messaging catalog over Kafka (topics are
- * discovered live) and the Iceberg catalog Tableflow writes to (same JDBC backend as the REST
+ * discovered live) and the Iceberg catalog that topics are materialized into (same JDBC backend as the REST
  * service, so tables appear as soon as Flink creates them).
  */
 @ApplicationScoped
@@ -77,6 +77,6 @@ public class CatalogBootstrap {
         properties.put("s3-secret-access-key", internal.s3SecretKey());
         properties.put("s3-path-style-access", "true");
         return Map.of("name", "lake", "type", "RELATIONAL", "provider", "lakehouse-iceberg",
-                "comment", "Iceberg tables written by Tableflow", "properties", properties);
+                "comment", "Iceberg tables materialized from topics", "properties", properties);
     }
 }

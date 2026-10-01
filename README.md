@@ -18,7 +18,7 @@ SELECT c.customer_id, c.email, COUNT(o.order_id) AS orders, SUM(o.total) AS life
 FROM `shop.public.customers` c LEFT JOIN `shop.public.orders` o ON o.customer_id = c.customer_id
 GROUP BY c.customer_id, c.email;
 
-ALTER TOPIC customer_360 ENABLE TABLEFLOW;   -- continuously maintained Iceberg table
+ALTER TOPIC customer_360 ENABLE ICEBERG;     -- continuously maintained Iceberg table
 ALTER TOPIC customer_360 ENABLE CONTEXT;     -- millisecond lookups for apps and agents
 GRANT SELECT ON CONTEXT customer_360 TO ROLE support_agent;
 ```
@@ -30,7 +30,7 @@ GRANT SELECT ON CONTEXT customer_360 TO ROLE support_agent;
 | Capture | Debezium 3.7 on Kafka Connect | `CREATE CONNECTION` / `CREATE SOURCE` render and manage the connectors |
 | Transport | Apache Kafka 4.3 (KRaft), Apicurio Registry 3.3 | Topic lifecycle; Avro everywhere in the Confluent wire format |
 | Transform | Apache Flink 2.1 + SQL Gateway | `CREATE MATERIALIZED VIEW` becomes a managed Flink job writing an upsert topic |
-| Serve: analytics | Apache Iceberg 1.12 on SeaweedFS (S3) | **Tableflow**: `ENABLE TABLEFLOW` lands any topic in Iceberg (append or upsert) |
+| Serve: analytics | Apache Iceberg 1.12 on SeaweedFS (S3) | `ENABLE ICEBERG` continuously lands any topic in an Iceberg table (append or upsert) |
 | Serve: real time | PostgreSQL 17 | **Context Engine**: an open counterpart of Confluent's Real-Time Context Engine. It materializes topics and answers *lightning queries* over REST and MCP |
 | Govern | Apache Gravitino 1.3, Keycloak 26 | OIDC everywhere, `GRANT`s enforced on every query, an audit log, lineage (stored and emitted as OpenLineage) |
 
@@ -47,7 +47,7 @@ Everything is Apache 2.0, except PostgreSQL, which uses the permissive PostgreSQ
      │            ▼                                       │
  Postgres ──► Debezium ──► Kafka ◄──► Flink (views) ──────┤
                              │                            │
-                             └──► Flink (Tableflow) ──► Iceberg on S3
+                             └──► Flink (topic → Iceberg) ──► Iceberg on S3
 ```
 
 ### Modules
@@ -95,13 +95,13 @@ CREATE [OR REPLACE] CONNECTION name TYPE POSTGRES WITH (host = '…', port = '54
     user = '…', password = SECRET 'ref' [, publication = '…'])
 CREATE [OR REPLACE] SOURCE name FROM CONNECTION conn TABLES (schema.table, …)
 CREATE [OR REPLACE] MATERIALIZED VIEW name PRIMARY KEY (col, …) AS <Flink SQL query>
-ALTER TOPIC topic ENABLE TABLEFLOW [WITH (mode = 'upsert' | 'append')]
+ALTER TOPIC topic ENABLE ICEBERG [WITH (mode = 'upsert' | 'append')]
 ALTER TOPIC topic ENABLE CONTEXT [WITH (mode = 'upsert' | 'append', description = '…')]
-ALTER TOPIC topic DISABLE TABLEFLOW | CONTEXT
+ALTER TOPIC topic DISABLE ICEBERG | CONTEXT
 GRANT | REVOKE SELECT ON CONTEXT topic TO | FROM ROLE role
 DROP CONNECTION | SOURCE | MATERIALIZED VIEW [IF EXISTS] name
-SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | TABLEFLOWS | CONTEXT TABLES | GRANTS
-DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | TABLEFLOW | CONTEXT name
+SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
+DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | ICEBERG | CONTEXT name
 ```
 
 Rules and behaviors:
@@ -116,7 +116,7 @@ Rules and behaviors:
 What works, verified by `make e2e` on a laptop:
 - CDC from Postgres.
 - Materialized views as Flink jobs.
-- Tableflow into Iceberg: append and upsert.
+- Topics continuously materialized as Iceberg tables: append and upsert.
 - The Context Engine: upsert and append modes, exactly-once offsets, schema evolution by added columns, REST and MCP.
 - OIDC, grants, audit and lineage.
 
@@ -128,7 +128,7 @@ Known limitations, and what comes next:
 - **Lineage:** stored by the control plane (shown by `DESCRIBE`) and sent to Gravitino as OpenLineage events. Gravitino 1.3 has no API to read lineage back.
 - **Context Engine:** one instance. Next: scale out with partition assignment, and pluggable stores (RocksDB, Fluss).
 - **Changing a view's query** starts a new job that reprocesses its inputs from the beginning (no savepoint migration).
-- **Tableflow schema evolution:** a new column in the topic is not yet added to the Iceberg table.
+- **Iceberg schema evolution:** a new column in the topic is not yet added to the Iceberg table.
 - **Debezium `numeric`** columns are captured as `double`.
 - **Not yet available:** Helm charts, a web UI, column masking and row filters.
 

@@ -196,7 +196,7 @@ Notes:
 - Column names and types must be compatible with the Avro fields: `int`→INT, `double`→DOUBLE, `string`→STRING, ZonedTimestamp→STRING (cast with `TO_TIMESTAMP_LTZ` / `CAST` in SQL if needed).
 - A Flink-produced `upsert-kafka` sink with `avro-confluent` auto-registers `<topic>-key` / `<topic>-value` through the same ccompat URL.
 
-### 4. Iceberg REST catalog `lake` (served by Gravitino) and Tableflow jobs
+### 4. Iceberg REST catalog `lake` (served by Gravitino) and topic-to-Iceberg jobs
 
 ```sql
 CREATE CATALOG lake WITH (
@@ -216,7 +216,7 @@ CREATE DATABASE IF NOT EXISTS lake.streamhouse;
 CREATE TABLE IF NOT EXISTS lake.streamhouse.shop_public_orders (
   order_id INT NOT NULL, customer_id INT, status STRING, total DOUBLE, created_at STRING, updated_at STRING
 );
-SET 'pipeline.name' = 'tableflow-append-shop.public.orders';
+SET 'pipeline.name' = 'iceberg-shop.public.orders-append';
 INSERT INTO lake.streamhouse.shop_public_orders SELECT * FROM orders_log;
 
 -- upsert table (current state; equality deletes)
@@ -224,7 +224,7 @@ CREATE TABLE IF NOT EXISTS lake.streamhouse.shop_public_orders_upsert (
   order_id INT NOT NULL, customer_id INT, status STRING, total DOUBLE, created_at STRING, updated_at STRING,
   PRIMARY KEY (order_id) NOT ENFORCED
 ) WITH ('format-version' = '2', 'write.upsert.enabled' = 'true');
-SET 'pipeline.name' = 'tableflow-upsert-shop.public.orders';
+SET 'pipeline.name' = 'iceberg-shop.public.orders-upsert';
 INSERT INTO lake.streamhouse.shop_public_orders_upsert SELECT * FROM orders_src;
 ```
 
@@ -247,7 +247,7 @@ POST http://gravitino:8090/api/metalakes/streamhouse/catalogs        # Kafka top
       "properties":{"bootstrap.servers":"kafka:9092"}}
 GET  .../metalakes/streamhouse/catalogs/kafka/schemas/default/topics # lists live Kafka topics (schema is always "default")
 POST http://gravitino:8090/api/metalakes/streamhouse/catalogs        # the same Iceberg tables Flink writes
-     {"name":"lake","type":"RELATIONAL","provider":"lakehouse-iceberg","comment":"Iceberg tables (Tableflow)",
+     {"name":"lake","type":"RELATIONAL","provider":"lakehouse-iceberg","comment":"Iceberg tables materialized from topics",
       "properties":{"catalog-backend":"jdbc","catalog-backend-name":"lake",
         "uri":"jdbc:postgresql://platform-db:5432/iceberg","jdbc-driver":"org.postgresql.Driver",
         "jdbc-user":"streamhouse","jdbc-password":"streamhouse","jdbc-initialize":"true",
@@ -277,7 +277,7 @@ Verified event body:
 ```json
 {"eventType":"COMPLETE","eventTime":"2026-10-01T10:00:00Z",
  "run":{"runId":"0196a8c2-fe01-7439-87e6-56a1a1b4029f"},
- "job":{"namespace":"streamhouse","name":"tableflow-upsert-shop.public.orders"},
+ "job":{"namespace":"streamhouse","name":"iceberg-shop.public.orders-upsert"},
  "inputs":[{"namespace":"kafka://kafka:9092","name":"shop.public.orders"}],
  "outputs":[{"namespace":"iceberg://lake","name":"streamhouse.shop_public_orders_upsert"}],
  "producer":"https://github.com/streamhouse-oss","schemaURL":"https://openlineage.io/spec/2-0-2/OpenLineage.json#/definitions/RunEvent"}

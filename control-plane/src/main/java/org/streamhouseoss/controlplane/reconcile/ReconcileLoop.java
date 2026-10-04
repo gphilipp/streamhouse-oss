@@ -65,7 +65,6 @@ public class ReconcileLoop {
 
     /** Requests a pass soon without blocking the caller. */
     public void trigger() {
-        rerun.set(true);
         triggers.submit(this::runOnce);
     }
 

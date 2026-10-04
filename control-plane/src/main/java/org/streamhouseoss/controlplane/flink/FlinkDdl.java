@@ -1,154 +1,71 @@
 package org.streamhouseoss.controlplane.flink;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 
-import org.apache.avro.LogicalType;
-import org.apache.avro.LogicalTypes;
-import org.apache.avro.Schema;
 import org.streamhouseoss.controlplane.StreamhouseConfig;
+import org.streamhouseoss.controlplane.clients.FlinkGateway.Column;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
- * Renders Flink SQL DDL for the tables jobs read and write: Kafka topics (Avro in the Confluent
- * wire format, schemas in the registry) and Iceberg tables in the {@code lake} catalog.
+ * Flink SQL the control plane generates. Kafka topics are read and written through the topic
+ * catalog (flink-catalog), which owns how a topic maps to a table; Iceberg tables live in the
+ * {@code lake} catalog, registered in every Flink session by the catalog store.
  */
 @ApplicationScoped
 public class FlinkDdl {
 
     public static final String LAKE = "lake";
 
-    /** A Flink column: name, SQL type and nullability. */
-    public record FlinkColumn(String name, String type, boolean nullable) {
-        String ddl(boolean forceNotNull) {
-            return quote(name) + " " + type + (nullable && !forceNotNull ? "" : " NOT NULL");
-        }
-    }
-
-    private final StreamhouseConfig.Internal internal;
     private final String namespace;
+    private final String topicCatalog;
+    private final String topicDatabase;
 
+    @Inject
     public FlinkDdl(StreamhouseConfig config) {
-        this.internal = config.internal();
-        this.namespace = config.icebergNamespace();
+        this(config.lake().namespace(), config.flink().topicCatalog(), config.flink().topicDatabase());
     }
 
-    // ---- Avro -> Flink types ------------------------------------------------------------------
-
-    public static List<FlinkColumn> columns(Schema record) {
-        if (record.getType() != Schema.Type.RECORD) {
-            throw new IllegalArgumentException("expected an Avro record schema, got " + record.getType());
-        }
-        List<FlinkColumn> columns = new ArrayList<>();
-        for (Schema.Field field : record.getFields()) {
-            columns.add(new FlinkColumn(field.name(), type(field.schema()), nullable(field.schema())));
-        }
-        return columns;
+    public FlinkDdl(String namespace, String topicCatalog, String topicDatabase) {
+        this.namespace = namespace;
+        this.topicCatalog = topicCatalog;
+        this.topicDatabase = topicDatabase;
     }
 
-    static boolean nullable(Schema schema) {
-        return schema.getType() == Schema.Type.UNION && schema.getTypes().stream().anyMatch(s -> s.getType() == Schema.Type.NULL);
+    public String namespace() {
+        return namespace;
     }
 
-    static String type(Schema schema) {
-        Schema s = schema;
-        if (s.getType() == Schema.Type.UNION) {
-            List<Schema> branches = s.getTypes().stream().filter(b -> b.getType() != Schema.Type.NULL).toList();
-            if (branches.size() != 1) {
-                throw new IllegalArgumentException("unions other than [null, T] are not supported: " + schema);
-            }
-            s = branches.getFirst();
-        }
-        LogicalType logical = s.getLogicalType();
-        return switch (s.getType()) {
-            case BOOLEAN -> "BOOLEAN";
-            case INT -> logical instanceof LogicalTypes.Date ? "DATE"
-                    : logical instanceof LogicalTypes.TimeMillis ? "TIME(3)" : "INT";
-            case LONG -> {
-                if (logical instanceof LogicalTypes.TimestampMillis || logical instanceof LogicalTypes.LocalTimestampMillis) {
-                    yield "TIMESTAMP(3)";
-                }
-                if (logical instanceof LogicalTypes.TimestampMicros || logical instanceof LogicalTypes.LocalTimestampMicros) {
-                    yield "TIMESTAMP(6)";
-                }
-                yield "BIGINT";
-            }
-            case FLOAT -> "FLOAT";
-            case DOUBLE -> "DOUBLE";
-            case STRING, ENUM -> "STRING";
-            case BYTES, FIXED -> logical instanceof LogicalTypes.Decimal d
-                    ? "DECIMAL(" + d.getPrecision() + ", " + d.getScale() + ")" : "BYTES";
-            case RECORD -> "ROW<" + s.getFields().stream()
-                    .map(f -> quote(f.name()) + " " + type(f.schema()) + (nullable(f.schema()) ? "" : " NOT NULL"))
-                    .collect(Collectors.joining(", ")) + ">";
-            case ARRAY -> "ARRAY<" + type(s.getElementType()) + ">";
-            case MAP -> "MAP<STRING, " + type(s.getValueType()) + ">";
-            case UNION, NULL -> throw new IllegalArgumentException("unsupported Avro type " + s);
-        };
+    /** Statements that make the topic catalog current, so unqualified names are topics. */
+    public List<String> useTopicCatalog() {
+        return List.of("USE CATALOG " + quote(topicCatalog), "USE " + quote(topicDatabase));
     }
 
-    // ---- DDL ----------------------------------------------------------------------------------
+    /** A topic as a fully qualified table of the topic catalog. */
+    public String topicTable(String topic) {
+        return quote(topicCatalog) + "." + quote(topicDatabase) + "." + quote(topic);
+    }
 
     /**
-     * A temporary table over a topic, named after the topic. With key fields it is an
-     * {@code upsert-kafka} changelog (latest value per key, tombstones delete); without, a plain
-     * append-only {@code kafka} source read from the earliest offset.
+     * A materialized view is a CREATE TABLE ... AS SELECT into an upsert topic keyed by the
+     * primary key, in the same dialect a statement would use.
      */
-    public String kafkaSource(String topic, List<FlinkColumn> columns, List<String> keyFields, String groupId) {
-        Map<String, String> options = new LinkedHashMap<>();
-        String pk = "";
-        if (!keyFields.isEmpty()) {
-            options.put("connector", "upsert-kafka");
-            options.put("key.format", "avro-confluent");
-            options.put("key.avro-confluent.url", internal.registryUrl());
-            options.put("value.fields-include", "ALL");
-            pk = ", PRIMARY KEY (" + keyFields.stream().map(FlinkDdl::quote).collect(Collectors.joining(", ")) + ") NOT ENFORCED";
-        } else {
-            options.put("connector", "kafka");
-            options.put("scan.startup.mode", "earliest-offset");
-        }
-        options.put("topic", topic);
-        options.put("properties.bootstrap.servers", internal.kafkaBootstrap());
-        options.put("properties.group.id", groupId);
-        options.put("value.format", "avro-confluent");
-        options.put("value.avro-confluent.url", internal.registryUrl());
-        String cols = columns.stream().map(c -> c.ddl(keyFields.contains(c.name()))).collect(Collectors.joining(", "));
-        return "CREATE TEMPORARY TABLE " + quote(topic) + " (" + cols + pk + ") WITH (" + options(options) + ")";
+    public static String materializedView(String name, List<String> primaryKey, String query) {
+        return "CREATE TABLE " + quote(name) + " (PRIMARY KEY (" + quoteAll(primaryKey) + ") NOT ENFORCED) "
+                + "WITH ('changelog.mode' = 'upsert') AS " + query;
     }
 
-    /** A temporary upsert-kafka sink writing Avro key/value and registering their schemas. */
-    public String upsertKafkaSink(String tableName, String topic, List<FlinkColumn> columns, List<String> primaryKey) {
-        Map<String, String> options = new LinkedHashMap<>();
-        options.put("connector", "upsert-kafka");
-        options.put("topic", topic);
-        options.put("properties.bootstrap.servers", internal.kafkaBootstrap());
-        options.put("key.format", "avro-confluent");
-        options.put("key.avro-confluent.url", internal.registryUrl());
-        options.put("value.format", "avro-confluent");
-        options.put("value.avro-confluent.url", internal.registryUrl());
-        options.put("value.fields-include", "ALL");
-        String cols = columns.stream().map(c -> c.ddl(primaryKey.contains(c.name()))).collect(Collectors.joining(", "));
-        return "CREATE TEMPORARY TABLE " + quote(tableName) + " (" + cols + ", PRIMARY KEY ("
-                + primaryKey.stream().map(FlinkDdl::quote).collect(Collectors.joining(", ")) + ") NOT ENFORCED) WITH ("
-                + options(options) + ")";
-    }
-
-    public String icebergCatalog() {
-        Map<String, String> options = new LinkedHashMap<>();
-        options.put("type", "iceberg");
-        options.put("catalog-type", "rest");
-        options.put("uri", internal.icebergRestUrl());
-        options.put("io-impl", "org.apache.iceberg.aws.s3.S3FileIO");
-        options.put("s3.endpoint", internal.s3Endpoint());
-        options.put("s3.path-style-access", "true");
-        options.put("s3.access-key-id", internal.s3AccessKey());
-        options.put("s3.secret-access-key", internal.s3SecretKey());
-        options.put("client.region", internal.s3Region());
-        return "CREATE CATALOG IF NOT EXISTS " + LAKE + " WITH (" + options(options) + ")";
+    /**
+     * An append-only view of a keyed topic: every record, updates included, using the topic
+     * catalog's own schema and formats.
+     */
+    public String appendLog(String name, String topic, List<String> keyColumns, String groupId) {
+        return "CREATE TEMPORARY TABLE " + quote(name) + " WITH ('connector' = 'kafka', "
+                + "'scan.startup.mode' = 'earliest-offset', 'key.fields' = " + literal(String.join(";", keyColumns)) + ", "
+                + "'properties.group.id' = " + literal(groupId) + ") "
+                + "LIKE " + topicTable(topic) + " (EXCLUDING CONSTRAINTS OVERWRITING OPTIONS)";
     }
 
     public String icebergNamespace() {
@@ -156,22 +73,19 @@ public class FlinkDdl {
     }
 
     /** Iceberg table for a topic; with a primary key it is a v2 upsert table (equality deletes). */
-    public String icebergTable(String table, List<FlinkColumn> columns, List<String> primaryKey) {
-        String cols = columns.stream().map(c -> c.ddl(primaryKey.contains(c.name()))).collect(Collectors.joining(", "));
+    public String icebergTable(String table, List<Column> columns, List<String> primaryKey) {
+        String cols = columns.stream()
+                .map(c -> quote(c.name()) + " " + c.type() + (c.nullable() && !primaryKey.contains(c.name()) ? "" : " NOT NULL"))
+                .collect(Collectors.joining(", "));
         if (primaryKey.isEmpty()) {
             return "CREATE TABLE IF NOT EXISTS " + icebergTableName(table) + " (" + cols + ")";
         }
         return "CREATE TABLE IF NOT EXISTS " + icebergTableName(table) + " (" + cols + ", PRIMARY KEY ("
-                + primaryKey.stream().map(FlinkDdl::quote).collect(Collectors.joining(", "))
-                + ") NOT ENFORCED) WITH ('format-version' = '2', 'write.upsert.enabled' = 'true')";
+                + quoteAll(primaryKey) + ") NOT ENFORCED) WITH ('format-version' = '2', 'write.upsert.enabled' = 'true')";
     }
 
     public String icebergTableName(String table) {
         return LAKE + "." + quote(namespace) + "." + quote(table);
-    }
-
-    public String namespace() {
-        return namespace;
     }
 
     /** Iceberg table name for a topic: dots are not allowed in Iceberg identifiers here. */
@@ -187,12 +101,11 @@ public class FlinkDdl {
         return '`' + identifier.replace("`", "``") + '`';
     }
 
-    static String literal(String value) {
-        return "'" + value.replace("'", "''") + "'";
+    public static String quoteAll(List<String> identifiers) {
+        return identifiers.stream().map(FlinkDdl::quote).collect(Collectors.joining(", "));
     }
 
-    private static String options(Map<String, String> options) {
-        return options.entrySet().stream().map(e -> literal(e.getKey()) + " = " + literal(e.getValue()))
-                .collect(Collectors.joining(", "));
+    static String literal(String value) {
+        return "'" + value.replace("'", "''") + "'";
     }
 }

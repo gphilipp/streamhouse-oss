@@ -1,5 +1,6 @@
 package org.streamhouseoss.controlplane.lineage;
 
+import org.streamhouseoss.controlplane.flink.FlinkDdl;
 import org.streamhouseoss.model.ResourceKind;
 
 /**
@@ -18,7 +19,7 @@ public record Edge(String source, String target, ResourceKind viaKind, String vi
     }
 
     public static String iceberg(String namespace, String table) {
-        return "iceberg://lake/" + namespace + "." + table;
+        return "iceberg://" + FlinkDdl.LAKE + "/" + namespace + "." + table;
     }
 
     public static String context(String table) {

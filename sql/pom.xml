@@ -10,12 +10,23 @@
   </parent>
   <artifactId>streamhouse-sql</artifactId>
   <name>Streamhouse OSS :: SQL</name>
-  <description>Parser for the streamhouse DDL (CREATE SOURCE, CREATE MATERIALIZED VIEW, ALTER TOPIC ... ENABLE CONTEXT, ...).</description>
+  <description>
+    The streamhouse DDL (CREATE SOURCE, CREATE MATERIALIZED VIEW, ALTER TOPIC ... ENABLE CONTEXT, ...) as an
+    extension of Apache Calcite's SQL parser, and the resource model it produces.
+  </description>
+
+  <properties>
+    <codegen.dir>${project.build.directory}/codegen</codegen.dir>
+    <fmpp.version>1.0</fmpp.version>
+    <freemarker.version>2.3.34</freemarker.version>
+    <javacc-plugin.version>2.6</javacc-plugin.version>
+    <javacc.version>4.0</javacc.version>
+  </properties>
 
   <dependencies>
     <dependency>
-      <groupId>org.streamhouseoss</groupId>
-      <artifactId>streamhouse-model</artifactId>
+      <groupId>org.apache.calcite</groupId>
+      <artifactId>calcite-core</artifactId>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -28,4 +39,113 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!-- 1. Calcite ships its parser grammar as an FMPP template inside calcite-core. -->
+      <plugin>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>unpack-calcite-parser-template</id>
+            <phase>initialize</phase>
+            <goals>
+              <goal>unpack</goal>
+            </goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>org.apache.calcite</groupId>
+                  <artifactId>calcite-core</artifactId>
+                  <type>jar</type>
+                  <overWrite>true</overWrite>
+                  <outputDirectory>${project.build.directory}/</outputDirectory>
+                  <includes>codegen/templates/Parser.jj,codegen/default_config.fmpp</includes>
+                </artifactItem>
+              </artifactItems>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 2. Our grammar additions (config.fmpp, includes/parserImpls.ftl) next to Calcite's template. -->
+      <plugin>
+        <artifactId>maven-resources-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-streamhouse-grammar</id>
+            <phase>initialize</phase>
+            <goals>
+              <goal>copy-resources</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${codegen.dir}</outputDirectory>
+              <resources>
+                <resource>
+                  <directory>src/main/codegen</directory>
+                </resource>
+              </resources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 3. FMPP renders Parser.jj with our statements, keywords and imports. -->
+      <plugin>
+        <groupId>com.googlecode.fmpp-maven-plugin</groupId>
+        <artifactId>fmpp-maven-plugin</artifactId>
+        <version>${fmpp.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.freemarker</groupId>
+            <artifactId>freemarker</artifactId>
+            <version>${freemarker.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>generate-parser-grammar</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>generate</goal>
+            </goals>
+            <configuration>
+              <cfgFile>${codegen.dir}/config.fmpp</cfgFile>
+              <templateDirectory>${codegen.dir}/templates</templateDirectory>
+              <outputDirectory>${project.build.directory}/generated-sources/fmpp</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- 4. JavaCC turns the grammar into StreamhouseSqlParserImpl. -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>javacc-maven-plugin</artifactId>
+        <version>${javacc-plugin.version}</version>
+        <dependencies>
+          <dependency>
+            <groupId>net.java.dev.javacc</groupId><!-- Calcite builds its parser with JavaCC 4.0 -->
+            <artifactId>javacc</artifactId>
+            <version>${javacc.version}</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>generate-parser</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>javacc</goal>
+            </goals>
+            <configuration>
+              <sourceDirectory>${project.build.directory}/generated-sources/fmpp</sourceDirectory>
+              <outputDirectory>${project.build.directory}/generated-sources/javacc</outputDirectory>
+              <includes>
+                <include>**/Parser.jj</include>
+              </includes>
+              <lookAhead>1</lookAhead>
+              <isStatic>false</isStatic>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 </project>

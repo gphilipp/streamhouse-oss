@@ -3,11 +3,10 @@ package org.streamhouseoss.controlplane.reconcile;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import org.streamhouseoss.controlplane.StreamhouseConfig;
-import org.streamhouseoss.controlplane.clients.ComponentException;
 import org.streamhouseoss.controlplane.clients.Gravitino;
+import org.streamhouseoss.controlplane.flink.FlinkDdl;
 
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -24,20 +23,11 @@ public class CatalogBootstrap {
 
     private final Gravitino gravitino;
     private final StreamhouseConfig config;
-    private final String icebergJdbcUrl;
-    private final String icebergJdbcUser;
-    private final String icebergJdbcPassword;
     private volatile boolean done;
 
-    public CatalogBootstrap(Gravitino gravitino, StreamhouseConfig config,
-            @ConfigProperty(name = "streamhouse.iceberg-catalog.jdbc-url", defaultValue = "jdbc:postgresql://platform-db:5432/iceberg") String icebergJdbcUrl,
-            @ConfigProperty(name = "streamhouse.iceberg-catalog.jdbc-user", defaultValue = "streamhouse") String icebergJdbcUser,
-            @ConfigProperty(name = "streamhouse.iceberg-catalog.jdbc-password", defaultValue = "streamhouse") String icebergJdbcPassword) {
+    public CatalogBootstrap(Gravitino gravitino, StreamhouseConfig config) {
         this.gravitino = gravitino;
         this.config = config;
-        this.icebergJdbcUrl = icebergJdbcUrl;
-        this.icebergJdbcUser = icebergJdbcUser;
-        this.icebergJdbcPassword = icebergJdbcPassword;
     }
 
     /** Retries until Gravitino is reachable, then stops. */
@@ -49,7 +39,7 @@ public class CatalogBootstrap {
         try {
             gravitino.bootstrap(kafkaCatalog(), icebergCatalog());
             done = true;
-        } catch (ComponentException e) {
+        } catch (RuntimeException e) {
             LOG.warnf("Gravitino bootstrap pending: %s", e.getMessage());
         }
     }
@@ -60,23 +50,23 @@ public class CatalogBootstrap {
     }
 
     Map<String, Object> icebergCatalog() {
-        StreamhouseConfig.Internal internal = config.internal();
+        StreamhouseConfig.Lake lake = config.lake();
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("catalog-backend", "jdbc");
-        properties.put("catalog-backend-name", "lake");
-        properties.put("uri", icebergJdbcUrl);
+        properties.put("catalog-backend-name", FlinkDdl.LAKE);
+        properties.put("uri", lake.jdbcUrl());
         properties.put("jdbc-driver", "org.postgresql.Driver");
-        properties.put("jdbc-user", icebergJdbcUser);
-        properties.put("jdbc-password", icebergJdbcPassword);
+        properties.put("jdbc-user", lake.jdbcUser());
+        properties.put("jdbc-password", lake.jdbcPassword());
         properties.put("jdbc-initialize", "true");
-        properties.put("warehouse", "s3://warehouse/");
+        properties.put("warehouse", lake.warehouse());
         properties.put("io-impl", "org.apache.iceberg.aws.s3.S3FileIO");
-        properties.put("s3-endpoint", internal.s3Endpoint());
-        properties.put("s3-region", internal.s3Region());
-        properties.put("s3-access-key-id", internal.s3AccessKey());
-        properties.put("s3-secret-access-key", internal.s3SecretKey());
+        properties.put("s3-endpoint", lake.s3Endpoint());
+        properties.put("s3-region", lake.s3Region());
+        properties.put("s3-access-key-id", lake.s3AccessKey());
+        properties.put("s3-secret-access-key", lake.s3SecretKey());
         properties.put("s3-path-style-access", "true");
-        return Map.of("name", "lake", "type", "RELATIONAL", "provider", "lakehouse-iceberg",
+        return Map.of("name", FlinkDdl.LAKE, "type", "RELATIONAL", "provider", "lakehouse-iceberg",
                 "comment", "Iceberg tables materialized from topics", "properties", properties);
     }
 }

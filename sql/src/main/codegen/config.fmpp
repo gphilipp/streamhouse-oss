@@ -1,0 +1,72 @@
+# Streamhouse DDL as an extension of Apache Calcite's SQL parser.
+#
+# FMPP renders Calcite's Parser.jj template (unpacked from calcite-core) with the data below;
+# anything not declared here comes from Calcite's default_config.fmpp.
+
+data: {
+  default: tdd("../default_config.fmpp")
+  parser: {
+    package: "org.streamhouseoss.sql.parser.impl"
+    class: "StreamhouseSqlParserImpl"
+
+    imports: [
+      "org.streamhouseoss.sql.parser.SqlStreamhouseStatement"
+      "org.streamhouseoss.sql.parser.SqlStreamhouseStatement.Verb"
+    ]
+
+    # New words. All non-reserved, so they remain usable as names.
+    keywords: [
+      "CONNECTIONS"
+      "CONTEXT"
+      "DISABLE"
+      "ENABLE"
+      "GRANTS"
+      "ICEBERG"
+      "IF"
+      "MATERIALIZED"
+      "SECRET"
+      "SOURCES"
+      "STATEMENTS"
+      "TABLES"
+      "TOPIC"
+      "TOPICS"
+      "VIEWS"
+    ]
+    nonReservedKeywordsToAdd: [
+      "CONNECTIONS"
+      "CONTEXT"
+      "DISABLE"
+      "ENABLE"
+      "GRANTS"
+      "ICEBERG"
+      "IF"
+      "MATERIALIZED"
+      "SECRET"
+      "SOURCES"
+      "STATEMENTS"
+      "TABLES"
+      "TOPIC"
+      "TOPICS"
+      "VIEWS"
+    ]
+
+    # Each method starts with its own leading words (CREATE <kind>, ALTER TOPIC, ...).
+    statementParserMethods: [
+      "SqlStreamhouseCreate()"
+      "SqlStreamhouseDrop()"
+      "SqlStreamhouseAlterTopic()"
+      "SqlStreamhouseGrant()"
+      "SqlStreamhouseRevoke()"
+      "SqlStreamhouseShow()"
+      "SqlStreamhouseDescribe()"
+    ]
+
+    implementationFiles: [
+      "parserImpls.ftl"
+    ]
+  }
+}
+
+freemarkerLinks: {
+  includes: includes/
+}

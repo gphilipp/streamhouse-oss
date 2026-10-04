@@ -15,7 +15,7 @@
   <dependencies>
     <dependency>
       <groupId>org.streamhouseoss</groupId>
-      <artifactId>streamhouse-model</artifactId>
+      <artifactId>streamhouse-sql</artifactId>
     </dependency>
 
     <dependency>

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
+import org.streamhouseoss.controlplane.clients.KafkaTopics;
 import org.streamhouseoss.controlplane.reconcile.ReconcileLoop;
 
 import io.quarkus.test.InjectMock;
@@ -40,6 +41,10 @@ class SqlApiTest {
 
     @InjectMock
     ReconcileLoop loop;
+
+    /** No Kafka here: topics that no declared resource produces are reported as missing. */
+    @InjectMock
+    KafkaTopics topics;
 
     private static JsonPath sql(String script) {
         return given().contentType(ContentType.JSON).body(Map.of("sql", script))
@@ -93,7 +98,7 @@ class SqlApiTest {
 
         assertThat(sql("CREATE MATERIALIZED VIEW v PRIMARY KEY (id) AS SELECT 1 AS id FROM somewhere").getString("results[0].message"))
                 .contains("must read at least one declared topic").contains("shop.public.orders");
-        assertThat(sql("ALTER TOPIC not.a.topic ENABLE CONTEXT").getString("results[0].message"))
+        assertThat(sql("ALTER TOPIC missing.topic ENABLE CONTEXT").getString("results[0].message"))
                 .contains("does not exist and no source or materialized view produces it");
     }
 
@@ -150,6 +155,6 @@ class SqlApiTest {
         given().contentType(ContentType.JSON).body(Map.of("sql", "SHOW SOURCES;\nCREATE SAUCE x"))
                 .post("/v1/sql").then().statusCode(400)
                 .body("line", equalTo(2))
-                .body("error", containsString("expected CONNECTION, SOURCE, MATERIALIZED VIEW or STATEMENT"));
+                .body("error", containsString("Incorrect syntax near the keyword 'CREATE'"));
     }
 }

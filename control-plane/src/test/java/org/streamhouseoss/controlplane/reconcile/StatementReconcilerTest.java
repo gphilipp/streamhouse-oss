@@ -8,12 +8,12 @@ class StatementReconcilerTest {
 
     @Test
     void findsTheTableAStatementWrites() {
-        assertThat(StatementReconciler.target("CREATE TABLE customer_360 (PRIMARY KEY (k) NOT ENFORCED) AS SELECT 1"))
+        assertThat(Topology.target("CREATE TABLE customer_360 (PRIMARY KEY (k) NOT ENFORCED) AS SELECT 1"))
                 .contains("customer_360");
-        assertThat(StatementReconciler.target("create table if not exists `streamhouse`.`local`.`orders.v2` as select 1"))
+        assertThat(Topology.target("create table if not exists `streamhouse`.`local`.`orders.v2` as select 1"))
                 .contains("orders.v2");
-        assertThat(StatementReconciler.target("INSERT INTO `shop.public.audit` SELECT * FROM x")).contains("shop.public.audit");
-        assertThat(StatementReconciler.target("ALTER TABLE `shop.public.orders` SET ('changelog.mode' = 'upsert')")).isEmpty();
+        assertThat(Topology.target("INSERT INTO `shop.public.audit` SELECT * FROM x")).contains("shop.public.audit");
+        assertThat(Topology.target("ALTER TABLE `shop.public.orders` SET ('changelog.mode' = 'upsert')")).isEmpty();
     }
 
     @Test

@@ -10,12 +10,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
 import org.streamhouseoss.controlplane.StreamhouseConfig;
 import org.streamhouseoss.controlplane.clients.ComponentException;
 import org.streamhouseoss.controlplane.clients.ConnectClient;
 import org.streamhouseoss.controlplane.clients.KafkaTopics;
-import org.streamhouseoss.controlplane.clients.SchemaRegistry;
+import org.streamhouseoss.controlplane.clients.SchemaRegistryApi;
 import org.streamhouseoss.controlplane.clients.Secrets;
 import org.streamhouseoss.controlplane.lineage.Edge;
 import org.streamhouseoss.controlplane.state.StoredResource;
@@ -37,11 +38,11 @@ public class SourceReconciler implements Reconciler {
 
     private final ConnectClient connect;
     private final KafkaTopics topics;
-    private final SchemaRegistry registry;
+    private final SchemaRegistryApi registry;
     private final Secrets secrets;
     private final StreamhouseConfig.Internal internal;
 
-    public SourceReconciler(ConnectClient connect, KafkaTopics topics, SchemaRegistry registry, Secrets secrets,
+    public SourceReconciler(ConnectClient connect, KafkaTopics topics, @RestClient SchemaRegistryApi registry, Secrets secrets,
             StreamhouseConfig config) {
         this.connect = connect;
         this.topics = topics;
@@ -97,7 +98,7 @@ public class SourceReconciler implements Reconciler {
         config.put("connector.class", "io.debezium.connector.postgresql.PostgresConnector");
         config.put("tasks.max", "1");
         config.put("database.hostname", secrets.resolve(options, "host"));
-        config.put("database.port", options.containsKey("port") ? secrets.resolve(options, "port") : "5432");
+        config.put("database.port", port(options));
         config.put("database.user", secrets.resolve(options, "user"));
         config.put("database.password", secrets.resolve(options, "password"));
         config.put("database.dbname", secrets.resolve(options, "database"));
@@ -139,8 +140,10 @@ public class SourceReconciler implements Reconciler {
         List<String> sourceTopics = source.tables().stream().map(source::topicFor).toList();
         topics.delete(sourceTopics);
         sourceTopics.forEach(t -> {
-            registry.deleteSubject(t + "-key");
-            registry.deleteSubject(t + "-value");
+            for (String subject : List.of(t + "-key", t + "-value")) {
+                registry.delete(subject, false);
+                registry.delete(subject, true);
+            }
         });
         return true;
     }
@@ -153,8 +156,7 @@ public class SourceReconciler implements Reconciler {
             return;
         }
         Map<String, OptionValue> o = connection.get().options();
-        String url = "jdbc:postgresql://" + secrets.resolve(o, "host") + ":"
-                + (o.containsKey("port") ? secrets.resolve(o, "port") : "5432") + "/" + secrets.resolve(o, "database");
+        String url = "jdbc:postgresql://" + secrets.resolve(o, "host") + ":" + port(o) + "/" + secrets.resolve(o, "database");
         try (Connection c = DriverManager.getConnection(url, secrets.resolve(o, "user"), secrets.resolve(o, "password"));
                 PreparedStatement ps = c.prepareStatement(
                         "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = ? AND NOT active")) {
@@ -163,6 +165,10 @@ public class SourceReconciler implements Reconciler {
         } catch (SQLException | ComponentException e) {
             LOG.warnf("Cannot drop replication slot %s on %s: %s", slotName(source.name()), url, e.getMessage());
         }
+    }
+
+    private String port(Map<String, OptionValue> options) {
+        return options.containsKey("port") ? secrets.resolve(options, "port") : "5432";
     }
 
     @Override

@@ -19,7 +19,6 @@
   </licenses>
 
   <modules>
-    <module>model</module>
     <module>sql</module>
     <module>context-engine</module>
     <module>control-plane</module>
@@ -49,11 +48,6 @@
         <version>${quarkus.version}</version>
         <type>pom</type>
         <scope>import</scope>
-      </dependency>
-      <dependency>
-        <groupId>org.streamhouseoss</groupId>
-        <artifactId>streamhouse-model</artifactId>
-        <version>${project.version}</version>
       </dependency>
       <dependency>
         <groupId>org.streamhouseoss</groupId>

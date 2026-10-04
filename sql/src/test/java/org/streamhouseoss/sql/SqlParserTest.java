@@ -21,7 +21,7 @@ class SqlParserTest {
     void createConnectionWithSecret() {
         var stmt = (Statement.Apply) SqlParser.parseStatement("""
                 CREATE CONNECTION shop_pg TYPE POSTGRES WITH (
-                  host = 'shop-db', port = 5432, database = 'shop', "user" = 'debezium', password = SECRET 'shop_pg_pwd'
+                  host = 'shop-db', port = 5432, database = 'shop', user = 'debezium', password = SECRET 'shop_pg_pwd'
                 )""");
 
         assertThat(stmt.orReplace()).isFalse();
@@ -88,15 +88,15 @@ class SqlParserTest {
                 CREATE TABLE customer_360 (PRIMARY KEY (customer_key) NOT ENFORCED)
                 DISTRIBUTED BY HASH(customer_key) INTO 1 BUCKETS WITH ('key.format' = 'raw')
                 AS SELECT CAST(customer_id AS STRING) AS customer_key FROM `shop.public.customers`""";
-        List<Statement> stmts = SqlParser.parseScript("CREATE STATEMENT \"customer-360\" AS " + sql
-                + ";\nCREATE STATEMENT \"orders.as-upsert\" AS ALTER TABLE `shop.public.orders` SET ('changelog.mode' = 'upsert');"
-                + "\nDROP STATEMENT IF EXISTS \"customer-360\";\nSHOW STATEMENTS");
+        List<Statement> stmts = SqlParser.parseScript("CREATE STATEMENT `customer-360` AS " + sql
+                + ";\nCREATE STATEMENT `orders.as-upsert` AS ALTER TABLE `shop.public.orders` SET ('changelog.mode' = 'upsert');"
+                + "\nDROP STATEMENT IF EXISTS `customer-360`;\nSHOW STATEMENTS");
 
         assertThat(((Statement.Apply) stmts.get(0)).resource()).isEqualTo(new Resource.Statement("customer-360", sql));
         assertThat(stmts.get(2)).isEqualTo(new Statement.Remove(ResourceKind.STATEMENT, "customer-360", true,
-                "DROP STATEMENT IF EXISTS \"customer-360\""));
+                "DROP STATEMENT IF EXISTS `customer-360`"));
         assertThat(stmts.get(3)).isEqualTo(new Statement.Show(ResourceKind.STATEMENT, "SHOW STATEMENTS"));
-        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE STATEMENT \"Bad_Name\" AS SELECT 1"))
+        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE STATEMENT `Bad_Name` AS SELECT 1"))
                 .hasMessageContaining("invalid statement name: Bad_Name");
     }
 
@@ -139,18 +139,47 @@ class SqlParserTest {
     void errorsReportLineAndToken() {
         assertThatThrownBy(() -> SqlParser.parseScript("SHOW TOPICS;\nCREATE SOURCE s FROM shop_pg TABLES (public.t)"))
                 .isInstanceOf(SqlParseException.class)
-                .hasMessage("line 2: expected CONNECTION (found 'shop_pg')");
+                .hasMessage("line 2: syntax error at \"shop_pg\"; expected CONNECTION");
         assertThatThrownBy(() -> SqlParser.parseStatement("ALTER TOPIC t ENABLE ICEBERG WITH (mode = 'merge')"))
                 .hasMessageContaining("mode must be 'append' or 'upsert'");
         assertThatThrownBy(() -> SqlParser.parseStatement("ALTER TOPIC t ENABLE CONTEXT WITH (colour = 'red')"))
                 .hasMessageContaining("unknown option colour");
         assertThatThrownBy(() -> SqlParser.parseStatement("CREATE MATERIALIZED VIEW v PRIMARY KEY (id) AS ;"))
-                .hasMessageContaining("expected a query");
-        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE SOURCE \"Bad-Name\" FROM CONNECTION c TABLES (public.t)"))
+                .hasMessageContaining("expected a Flink SQL statement after AS");
+        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE SOURCE `Bad-Name` FROM CONNECTION c TABLES (public.t)"))
                 .hasMessageContaining("invalid name: Bad-Name");
         assertThatThrownBy(() -> SqlParser.parseStatement("SELECT 1"))
-                .hasMessageContaining("expected CREATE, ALTER");
+                .hasMessageContaining("expected CREATE, DROP, ALTER TOPIC");
+        assertThatThrownBy(() -> SqlParser.parseStatement("DROP SOURCE 42"))
+                .hasMessage("line 1: syntax error at \"42\"; expected a name");
+        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE SOURCE s FROM CONNECTION c TABLES (orders)"))
+                .hasMessageContaining("expected schema.table, got orders");
+        assertThatThrownBy(() -> SqlParser.parseStatement("CREATE CONNECTION c TYPE MYSQL"))
+                .hasMessageContaining("unsupported connection type mysql");
         assertThatThrownBy(() -> SqlParser.parseStatement("SHOW TOPICS; SHOW SOURCES"))
                 .hasMessageContaining("exactly one statement");
+    }
+
+    @Test
+    void embeddedFlinkSqlKeepsCommentsTabsAndSemicolonsInStrings() {
+        String query = "SELECT\tid, -- the key\n  'a;b' AS s /* not the end; */ FROM `t`";
+        List<Statement> stmts = SqlParser.parseScript(
+                "CREATE STATEMENT `copy` AS " + query + " ;\n\tSHOW STATEMENTS");
+
+        assertThat(((Resource.Statement) ((Statement.Apply) stmts.get(0)).resource()).sql()).isEqualTo(query);
+        assertThat(stmts.get(1).text()).isEqualTo("SHOW STATEMENTS");
+    }
+
+    @Test
+    void reservedWordsWorkAsOptionNamesAndKindWordsAsNames() {
+        var connection = (Resource.Connection) ((Statement.Apply) SqlParser.parseStatement(
+                "CREATE CONNECTION source TYPE postgres WITH (user = 'u', 'key.format' = 'raw', publication = 'p', ssl = TRUE)")).resource();
+
+        assertThat(connection.name()).isEqualTo("source");
+        assertThat(connection.options()).containsEntry("user", new OptionValue.Literal("u"))
+                .containsEntry("key.format", new OptionValue.Literal("raw"))
+                .containsEntry("ssl", new OptionValue.Literal("true"));
+        assertThat(SqlParser.parseStatement("DROP SOURCE if")).isEqualTo(
+                new Statement.Remove(ResourceKind.SOURCE, "if", false, "DROP SOURCE if"));
     }
 }

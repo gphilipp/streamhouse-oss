@@ -12,8 +12,6 @@ public record StoredResource(
         String statement,
         long generation,
         boolean deleted,
-        String createdBy,
-        OffsetDateTime updatedAt,
         Phase phase,
         String message,
         long observedGeneration,

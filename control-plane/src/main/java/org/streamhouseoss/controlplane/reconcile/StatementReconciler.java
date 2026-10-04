@@ -1,18 +1,14 @@
 package org.streamhouseoss.controlplane.reconcile;
 
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-import org.streamhouseoss.controlplane.StreamhouseConfig;
 import org.streamhouseoss.controlplane.clients.ComponentException;
 import org.streamhouseoss.controlplane.clients.FlinkGateway;
 import org.streamhouseoss.controlplane.flink.FlinkDdl;
 import org.streamhouseoss.controlplane.lineage.Edge;
-import org.streamhouseoss.controlplane.state.Phase;
 import org.streamhouseoss.controlplane.state.StoredResource;
 import org.streamhouseoss.model.Resource;
 import org.streamhouseoss.model.ResourceKind;
@@ -21,24 +17,16 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 /**
  * Runs a named Flink SQL statement in the topic catalog, where every Kafka topic is a table.
- * Statements that start a job (INSERT INTO, CREATE TABLE ... AS SELECT) are tracked like views;
- * others (ALTER TABLE, CREATE TABLE) run once per generation.
+ * Statements that start a job (INSERT INTO, CREATE TABLE ... AS SELECT) are kept running; others
+ * (ALTER TABLE, CREATE TABLE) run once per generation.
  */
 @ApplicationScoped
 public class StatementReconciler implements Reconciler {
 
-    private static final Pattern TARGET = Pattern.compile(
-            "^\\s*(?:CREATE\\s+(?:OR\\s+REPLACE\\s+)?TABLE(?:\\s+IF\\s+NOT\\s+EXISTS)?|INSERT\\s+(?:INTO|OVERWRITE))\\s+((?:`[^`]+`|[\\w$]+)(?:\\s*\\.\\s*(?:`[^`]+`|[\\w$]+))*)",
-            Pattern.CASE_INSENSITIVE);
-
-    private final FlinkGateway gateway;
     private final FlinkJobSupport jobs;
-    private final StreamhouseConfig.Flink flink;
 
-    public StatementReconciler(FlinkGateway gateway, FlinkJobSupport jobs, StreamhouseConfig config) {
-        this.gateway = gateway;
+    public StatementReconciler(FlinkJobSupport jobs) {
         this.jobs = jobs;
-        this.flink = config.flink();
     }
 
     @Override
@@ -53,64 +41,43 @@ public class StatementReconciler implements Reconciler {
     @Override
     public Outcome reconcile(StoredResource stored, Topology topology) {
         Resource.Statement statement = (Resource.Statement) stored.resource();
-        String jobName = prefix(statement.name()) + FlinkJobSupport.hash(statement.sql());
+        return runSql(stored, prefix(statement.name()), statement.sql());
+    }
+
+    /** Runs {@code sql} as the job {@code <prefix><hash of sql>}; shared with materialized views. */
+    Outcome runSql(StoredResource stored, String prefix, String sql) {
         boolean changed = stored.observedGeneration() < stored.generation();
-        boolean completedOnce = Boolean.TRUE.equals(stored.details().get("completed"));
-        if (!changed && completedOnce) {
+        if (!changed && Boolean.TRUE.equals(stored.details().get("completed"))) {
             return Outcome.ready(stored.message(), stored.details());
         }
-        FlinkJobSupport.Observed observed = jobs.observe(prefix(statement.name()), jobName);
-        if (observed.state() == FlinkJobSupport.JobState.RUNNING) {
-            return FlinkJobSupport.running(observed, details(jobName, statement));
-        }
-        if (observed.state() == FlinkJobSupport.JobState.FAILED && !changed) {
-            return Outcome.failed(observed.message());
-        }
-        try (FlinkGateway.Session session = gateway.open(jobName)) {
-            session.execute("USE CATALOG " + FlinkDdl.quote(flink.topicCatalog()));
-            session.execute("USE " + FlinkDdl.quote(flink.topicDatabase()));
-            session.execute(FlinkDdl.set("pipeline.name", jobName));
-            String jobId;
-            try {
-                jobId = session.execute(statement.sql()).jobId();
-            } catch (ComponentException e) {
-                // A CTAS whose job stopped (e.g. Flink restarted) can't re-create its table: resume it
-                // by inserting the query into the existing table, as a restarted statement would.
-                Optional<String> query = ctasQuery(statement.sql());
-                Optional<String> target = target(statement.sql());
-                if (query.isEmpty() || target.isEmpty() || !e.getMessage().contains("already exists")) {
-                    throw e;
-                }
-                jobId = session.execute("INSERT INTO " + FlinkDdl.quote(target.get()) + " " + query.get()).jobId();
-            }
+        String jobName = prefix + FlinkJobSupport.hash(sql);
+        Map<String, Object> details = new HashMap<>(Map.of("job", jobName));
+        Topology.target(sql).ifPresent(t -> details.put("target", t));
+        return jobs.run(stored, prefix, jobName, details, session -> {
+            String jobId = submit(session, sql);
             if (jobId == null) {
-                Map<String, Object> done = new java.util.HashMap<>(details(jobName, statement));
-                done.put("completed", true);
-                return Outcome.ready("completed", done);
+                details.put("completed", true);
+                return Outcome.ready("completed", details);
             }
-            return new Outcome(Phase.PENDING, "submitted job " + jobId, details(jobName, statement));
+            return Outcome.pending("submitted job " + jobId, details);
+        });
+    }
+
+    /**
+     * Submits the statement. A CREATE TABLE ... AS SELECT whose job stopped (e.g. Flink restarted)
+     * can't re-create its table, so it resumes by inserting its query into the existing table.
+     */
+    private static String submit(FlinkGateway.Session session, String sql) {
+        try {
+            return session.execute(sql).jobId();
         } catch (ComponentException e) {
-            return Outcome.failed(e.getMessage());
+            Optional<String> query = ctasQuery(sql);
+            Optional<String> target = Topology.target(sql);
+            if (query.isEmpty() || target.isEmpty() || !e.getMessage().contains("already exists")) {
+                throw e;
+            }
+            return session.execute("INSERT INTO " + FlinkDdl.quote(target.get()) + " " + query.get()).jobId();
         }
-    }
-
-    private static Map<String, Object> details(String jobName, Resource.Statement statement) {
-        return target(statement.sql()).<Map<String, Object>>map(t -> Map.of("job", jobName, "target", t))
-                .orElse(Map.of("job", jobName));
-    }
-
-    /** The table a statement writes to, unqualified: CREATE TABLE x ... / INSERT INTO x ... */
-    public static Optional<String> target(String sql) {
-        Matcher m = TARGET.matcher(sql);
-        if (!m.find()) {
-            return Optional.empty();
-        }
-        List<String> parts = new ArrayList<>();
-        Matcher part = Pattern.compile("`([^`]+)`|([\\w$]+)").matcher(m.group(1));
-        while (part.find()) {
-            parts.add(part.group(1) != null ? part.group(1) : part.group(2));
-        }
-        return parts.isEmpty() ? Optional.empty() : Optional.of(parts.getLast());
     }
 
     /**
@@ -153,13 +120,6 @@ public class StatementReconciler implements Reconciler {
 
     @Override
     public List<Edge> lineage(Resource resource, Topology topology) {
-        Resource.Statement statement = (Resource.Statement) resource;
-        Optional<String> target = target(statement.sql());
-        if (target.isEmpty()) {
-            return List.of();
-        }
-        return topology.referencedTopics(statement.sql(), target.get()).stream()
-                .map(t -> new Edge(Edge.kafka(t), Edge.kafka(target.get()), ResourceKind.STATEMENT, statement.name()))
-                .toList();
+        return topology.lineage(resource);
     }
 }

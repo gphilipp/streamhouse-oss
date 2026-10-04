@@ -15,7 +15,7 @@ import org.streamhouseoss.model.TableRef;
 class TopologyTest {
 
     private static StoredResource stored(Resource r, boolean deleted) {
-        return new StoredResource(r, "", 1, deleted, "test", null, Phase.READY, "", 1, Map.of(), null);
+        return new StoredResource(r, "", 1, deleted, Phase.READY, "", 1, Map.of(), null);
     }
 
     private final Topology topology = Topology.of(List.of(

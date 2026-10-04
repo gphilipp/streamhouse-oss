@@ -9,3 +9,4 @@ demos/shop-assistant/config/*.env
 !demos/shop-assistant/config/oss.env
 .venv/
 __pycache__/
+.claude/

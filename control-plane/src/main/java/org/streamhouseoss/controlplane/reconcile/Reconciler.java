@@ -25,6 +25,10 @@ public interface Reconciler {
             return new Outcome(Phase.PENDING, message, Map.of());
         }
 
+        public static Outcome pending(String message, Map<String, Object> details) {
+            return new Outcome(Phase.PENDING, message, details);
+        }
+
         public static Outcome failed(String message) {
             return new Outcome(Phase.FAILED, message, Map.of());
         }

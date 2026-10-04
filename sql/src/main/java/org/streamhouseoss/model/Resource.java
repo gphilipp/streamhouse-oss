@@ -17,6 +17,9 @@ public sealed interface Resource {
 
     /** A named connection to an external system, e.g. an OLTP database used for CDC. */
     record Connection(String name, ConnectionType type, Map<String, OptionValue> options) implements Resource {
+        /** Options every connection must define. */
+        public static final List<String> REQUIRED_OPTIONS = List.of("host", "database", "user", "password");
+
         public Connection {
             requireName(name);
             Objects.requireNonNull(type, "type");

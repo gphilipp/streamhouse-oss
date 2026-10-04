@@ -5,7 +5,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
 
+import org.apache.calcite.avatica.util.Casing;
+import org.apache.calcite.avatica.util.Quoting;
+import org.apache.calcite.sql.SqlCharStringLiteral;
+import org.apache.calcite.sql.SqlIdentifier;
+import org.apache.calcite.sql.SqlLiteral;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.parser.SqlParserPos;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.streamhouseoss.model.ConnectionType;
 import org.streamhouseoss.model.OptionValue;
 import org.streamhouseoss.model.Privilege;
@@ -13,38 +23,36 @@ import org.streamhouseoss.model.Resource;
 import org.streamhouseoss.model.ResourceKind;
 import org.streamhouseoss.model.TableMode;
 import org.streamhouseoss.model.TableRef;
-import org.streamhouseoss.sql.Lexer.Token;
-import org.streamhouseoss.sql.Lexer.Type;
+import org.streamhouseoss.sql.parser.SqlStreamhouseStatement;
+import org.streamhouseoss.sql.parser.SqlStreamhouseStatement.Option;
+import org.streamhouseoss.sql.parser.impl.StreamhouseSqlParserImpl;
 
 /**
- * Recursive-descent parser for the streamhouse DDL.
- *
- * <pre>
- * CREATE [OR REPLACE] CONNECTION name TYPE POSTGRES [WITH (key = 'v' | SECRET 'ref', ...)]
- * CREATE [OR REPLACE] SOURCE name FROM CONNECTION name TABLES (schema.table, ...)
- * CREATE [OR REPLACE] MATERIALIZED VIEW name PRIMARY KEY (col, ...) AS &lt;Flink SQL query&gt;
- * CREATE [OR REPLACE] STATEMENT name AS &lt;Flink SQL statement&gt;
- * ALTER TOPIC topic ENABLE ICEBERG [WITH (mode = 'append' | 'upsert')]
- * ALTER TOPIC topic ENABLE CONTEXT [WITH (mode = ..., description = '...')]
- * ALTER TOPIC topic DISABLE ICEBERG | CONTEXT
- * GRANT SELECT ON CONTEXT topic TO ROLE role
- * REVOKE SELECT ON CONTEXT topic FROM ROLE role
- * DROP CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT [IF EXISTS] name
- * SHOW TOPICS | CONNECTIONS | SOURCES | MATERIALIZED VIEWS | STATEMENTS | ICEBERG TABLES | CONTEXT TABLES | GRANTS
- * DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT | ICEBERG | CONTEXT name
- * </pre>
- *
- * Unquoted identifiers are case-insensitive and normalized to lower case.
+ * Parses streamhouse SQL with Apache Calcite's parser, extended with the streamhouse DDL (see
+ * {@code src/main/codegen}). Identifiers are quoted with back ticks, like Flink SQL; unquoted ones
+ * are case-insensitive and normalized to lower case.
  */
 public final class SqlParser {
 
+    private static final org.apache.calcite.sql.parser.SqlParser.Config CONFIG = org.apache.calcite.sql.parser.SqlParser.config()
+            .withParserFactory(StreamhouseSqlParserImpl.FACTORY)
+            .withQuoting(Quoting.BACK_TICK)
+            .withUnquotedCasing(Casing.TO_LOWER)
+            .withQuotedCasing(Casing.UNCHANGED)
+            .withIdentifierMaxLength(200);
+
     private final String input;
-    private final List<Token> tokens;
-    private int pos;
+    private final int[] lineStarts;
 
     private SqlParser(String input) {
         this.input = input;
-        this.tokens = new Lexer(input).tokenize();
+        List<Integer> starts = new ArrayList<>(List.of(0));
+        for (int i = 0; i < input.length(); i++) {
+            if (input.charAt(i) == '\n') {
+                starts.add(i + 1);
+            }
+        }
+        this.lineStarts = starts.stream().mapToInt(Integer::intValue).toArray();
     }
 
     /** Parses a script of {@code ;}-separated statements. */
@@ -62,425 +70,200 @@ public final class SqlParser {
     }
 
     private List<Statement> script() {
+        List<SqlNode> nodes;
+        try {
+            nodes = org.apache.calcite.sql.parser.SqlParser.create(input, CONFIG).parseStmtList().getList();
+        } catch (org.apache.calcite.sql.parser.SqlParseException e) {
+            throw syntaxError(e);
+        }
         List<Statement> statements = new ArrayList<>();
-        while (peek().type() != Type.EOF) {
-            if (peek().type() == Type.SEMICOLON) {
-                pos++;
-                continue;
+        for (SqlNode node : nodes) {
+            if (!(node instanceof SqlStreamhouseStatement st)) {
+                throw new SqlParseException("expected CREATE, DROP, ALTER TOPIC, GRANT, REVOKE, SHOW or DESCRIBE",
+                        node.getParserPosition().getLineNum());
             }
-            int start = peek().start();
-            StatementBuilder builder = statement();
-            int end = tokens.get(pos - 1).end();
-            if (peek().type() != Type.EOF) {
-                expect(Type.SEMICOLON, "';'");
-            }
-            statements.add(builder.build(input.substring(start, end)));
+            statements.add(toStatement(st, slice(st.getParserPosition())));
         }
         return statements;
     }
 
-    private StatementBuilder statement() {
-        Token t = peek();
-        if (acceptWord("CREATE")) {
-            return create();
-        }
-        if (acceptWord("ALTER")) {
-            return alterTopic();
-        }
-        if (acceptWord("GRANT")) {
-            return grant();
-        }
-        if (acceptWord("REVOKE")) {
-            return revoke();
-        }
-        if (acceptWord("DROP")) {
-            return drop();
-        }
-        if (acceptWord("SHOW")) {
-            return show();
-        }
-        if (acceptWord("DESCRIBE")) {
-            ResourceKind kind = objectKind();
-            String name = kind == ResourceKind.ICEBERG_TABLE || kind == ResourceKind.CONTEXT_TABLE ? topicName() : identifier();
-            return text -> new Statement.Describe(kind, name, text);
-        }
-        throw error(t, "expected CREATE, ALTER, GRANT, REVOKE, DROP, SHOW or DESCRIBE");
-    }
-
-    private StatementBuilder create() {
-        boolean orReplace = false;
-        if (acceptWord("OR")) {
-            expectWord("REPLACE");
-            orReplace = true;
-        }
-        boolean replace = orReplace;
-        if (acceptWord("CONNECTION")) {
-            String name = identifier();
-            expectWord("TYPE");
-            Token typeToken = peek();
-            String typeName = identifier();
-            ConnectionType type;
-            try {
-                type = ConnectionType.valueOf(typeName.toUpperCase(Locale.ROOT));
-            } catch (IllegalArgumentException e) {
-                throw error(typeToken, "unsupported connection type " + typeName);
+    private Statement toStatement(SqlStreamhouseStatement st, String text) {
+        int line = st.getParserPosition().getLineNum();
+        return switch (st.verb) {
+            case CREATE_CONNECTION -> {
+                String typeName = name(st.target);
+                ConnectionType type = build(line, () -> ConnectionType.valueOf(typeName.toUpperCase(Locale.ROOT)),
+                        "unsupported connection type " + typeName);
+                Map<String, OptionValue> options = connectionOptions(st.options);
+                yield apply(line, () -> new Resource.Connection(name(st.name), type, options), st.replace, text);
             }
-            Map<String, OptionValue> options = acceptWord("WITH") ? options() : Map.of();
-            Resource resource = build(typeToken, () -> new Resource.Connection(name, type, options));
-            return text -> new Statement.Apply(resource, replace, text);
-        }
-        if (acceptWord("SOURCE")) {
-            Token nameToken = peek();
-            String name = identifier();
-            expectWord("FROM");
-            expectWord("CONNECTION");
-            String connection = identifier();
-            expectWord("TABLES");
-            expectSymbol("(");
-            List<TableRef> tables = new ArrayList<>();
-            do {
-                Token tableToken = peek();
-                String schema = identifier();
-                expectSymbol(".");
-                String table = identifier();
-                tables.add(build(tableToken, () -> new TableRef(schema, table)));
-            } while (acceptSymbol(","));
-            expectSymbol(")");
-            Resource resource = build(nameToken, () -> new Resource.Source(name, connection, tables));
-            return text -> new Statement.Apply(resource, replace, text);
-        }
-        if (acceptWord("MATERIALIZED")) {
-            expectWord("VIEW");
-            Token nameToken = peek();
-            String name = identifier();
-            expectWord("PRIMARY");
-            expectWord("KEY");
-            List<String> primaryKey = identifierList();
-            expectWord("AS");
-            String query = rawUntilEndOfStatement();
-            Resource resource = build(nameToken, () -> new Resource.MaterializedView(name, primaryKey, query));
-            return text -> new Statement.Apply(resource, replace, text);
-        }
-        if (acceptWord("STATEMENT")) {
-            Token nameToken = peek();
-            String name = identifier();
-            expectWord("AS");
-            String sql = rawUntilEndOfStatement();
-            Resource resource = build(nameToken, () -> new Resource.Statement(name, sql));
-            return text -> new Statement.Apply(resource, replace, text);
-        }
-        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW or STATEMENT");
-    }
-
-    private StatementBuilder alterTopic() {
-        expectWord("TOPIC");
-        Token topicToken = peek();
-        String topic = topicName();
-        if (acceptWord("ENABLE")) {
-            if (acceptWord("ICEBERG")) {
-                Map<String, String> options = literalOptions(Map.of(), "mode");
-                TableMode mode = options.containsKey("mode") ? tableMode(topicToken, options.get("mode")) : null;
-                Resource resource = build(topicToken, () -> new Resource.IcebergTable(topic, mode));
-                return text -> new Statement.Apply(resource, true, text);
+            case CREATE_SOURCE -> {
+                List<TableRef> tables = new ArrayList<>();
+                for (SqlIdentifier table : st.identifiers) {
+                    if (table.names.size() != 2) {
+                        throw new SqlParseException("expected schema.table, got " + String.join(".", table.names),
+                                table.getParserPosition().getLineNum());
+                    }
+                    tables.add(build(table.getParserPosition().getLineNum(),
+                            () -> new TableRef(table.names.get(0), table.names.get(1)), null));
+                }
+                yield apply(line, () -> new Resource.Source(name(st.name), name(st.target), tables), st.replace, text);
             }
-            expectWord("CONTEXT");
-            Map<String, String> options = literalOptions(Map.of(), "mode", "description");
-            TableMode mode = options.containsKey("mode") ? tableMode(topicToken, options.get("mode")) : null;
-            Resource resource = build(topicToken, () -> new Resource.ContextTable(topic, mode, options.get("description")));
-            return text -> new Statement.Apply(resource, true, text);
-        }
-        expectWord("DISABLE");
-        ResourceKind kind;
-        if (acceptWord("ICEBERG")) {
-            kind = ResourceKind.ICEBERG_TABLE;
-        } else {
-            expectWord("CONTEXT");
-            kind = ResourceKind.CONTEXT_TABLE;
-        }
-        return text -> new Statement.Remove(kind, topic, true, text);
-    }
-
-    private StatementBuilder grant() {
-        Token start = peek();
-        Privilege privilege = privilege();
-        expectWord("ON");
-        expectWord("CONTEXT");
-        String topic = topicName();
-        expectWord("TO");
-        expectWord("ROLE");
-        String role = identifier();
-        Resource resource = build(start, () -> new Resource.Grant(privilege, ResourceKind.CONTEXT_TABLE, topic, role));
-        return text -> new Statement.Apply(resource, true, text);
-    }
-
-    private StatementBuilder revoke() {
-        Token start = peek();
-        Privilege privilege = privilege();
-        expectWord("ON");
-        expectWord("CONTEXT");
-        String topic = topicName();
-        expectWord("FROM");
-        expectWord("ROLE");
-        String role = identifier();
-        Resource.Grant grant = build(start, () -> new Resource.Grant(privilege, ResourceKind.CONTEXT_TABLE, topic, role));
-        return text -> new Statement.Remove(ResourceKind.GRANT, grant.name(), true, text);
-    }
-
-    private StatementBuilder drop() {
-        ResourceKind kind;
-        if (acceptWord("CONNECTION")) {
-            kind = ResourceKind.CONNECTION;
-        } else if (acceptWord("SOURCE")) {
-            kind = ResourceKind.SOURCE;
-        } else if (acceptWord("MATERIALIZED")) {
-            expectWord("VIEW");
-            kind = ResourceKind.MATERIALIZED_VIEW;
-        } else if (acceptWord("STATEMENT")) {
-            kind = ResourceKind.STATEMENT;
-        } else {
-            throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW or STATEMENT");
-        }
-        boolean ifExists = false;
-        if (acceptWord("IF")) {
-            expectWord("EXISTS");
-            ifExists = true;
-        }
-        boolean exists = ifExists;
-        String name = identifier();
-        return text -> new Statement.Remove(kind, name, exists, text);
-    }
-
-    private StatementBuilder show() {
-        ResourceKind kind;
-        if (acceptWord("TOPICS")) {
-            kind = null;
-        } else if (acceptWord("CONNECTIONS")) {
-            kind = ResourceKind.CONNECTION;
-        } else if (acceptWord("SOURCES")) {
-            kind = ResourceKind.SOURCE;
-        } else if (acceptWord("MATERIALIZED")) {
-            expectWord("VIEWS");
-            kind = ResourceKind.MATERIALIZED_VIEW;
-        } else if (acceptWord("STATEMENTS")) {
-            kind = ResourceKind.STATEMENT;
-        } else if (acceptWord("ICEBERG")) {
-            expectWord("TABLES");
-            kind = ResourceKind.ICEBERG_TABLE;
-        } else if (acceptWord("CONTEXT")) {
-            expectWord("TABLES");
-            kind = ResourceKind.CONTEXT_TABLE;
-        } else if (acceptWord("GRANTS")) {
-            kind = ResourceKind.GRANT;
-        } else {
-            throw error(peek(), "expected TOPICS, CONNECTIONS, SOURCES, MATERIALIZED VIEWS, STATEMENTS, ICEBERG TABLES, CONTEXT TABLES or GRANTS");
-        }
-        return text -> new Statement.Show(kind, text);
-    }
-
-    private ResourceKind objectKind() {
-        if (acceptWord("CONNECTION")) {
-            return ResourceKind.CONNECTION;
-        }
-        if (acceptWord("SOURCE")) {
-            return ResourceKind.SOURCE;
-        }
-        if (acceptWord("MATERIALIZED")) {
-            expectWord("VIEW");
-            return ResourceKind.MATERIALIZED_VIEW;
-        }
-        if (acceptWord("STATEMENT")) {
-            return ResourceKind.STATEMENT;
-        }
-        if (acceptWord("ICEBERG")) {
-            return ResourceKind.ICEBERG_TABLE;
-        }
-        if (acceptWord("CONTEXT")) {
-            return ResourceKind.CONTEXT_TABLE;
-        }
-        throw error(peek(), "expected CONNECTION, SOURCE, MATERIALIZED VIEW, STATEMENT, ICEBERG or CONTEXT");
-    }
-
-    private Privilege privilege() {
-        Token t = peek();
-        String word = identifier();
-        try {
-            return Privilege.valueOf(word.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw error(t, "unsupported privilege " + word);
-        }
-    }
-
-    private TableMode tableMode(Token at, String value) {
-        try {
-            return TableMode.valueOf(value.toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw error(at, "mode must be 'append' or 'upsert', got '" + value + "'");
-        }
-    }
-
-    /** {@code WITH (key = value, ...)}; values may be secret references. */
-    private Map<String, OptionValue> options() {
-        Map<String, OptionValue> options = new LinkedHashMap<>();
-        expectSymbol("(");
-        do {
-            Token keyToken = peek();
-            String key = optionKey();
-            expectSymbol("=");
-            OptionValue value;
-            if (acceptWord("SECRET")) {
-                value = new OptionValue.Secret(expect(Type.STRING, "secret reference").text());
-            } else {
-                value = new OptionValue.Literal(literal());
+            case CREATE_MATERIALIZED_VIEW -> apply(line, () -> new Resource.MaterializedView(name(st.name),
+                    st.identifiers.stream().map(SqlParser::name).toList(), slice(st.raw)), st.replace, text);
+            case CREATE_STATEMENT -> apply(line, () -> new Resource.Statement(name(st.name), slice(st.raw)), st.replace, text);
+            case ENABLE -> {
+                String topic = topic(st.name);
+                if (st.object.equals("ICEBERG")) {
+                    Map<String, String> options = literalOptions(st.options, Set.of("mode"));
+                    TableMode mode = mode(options.get("mode"), line);
+                    yield apply(line, () -> new Resource.IcebergTable(topic, mode), true, text);
+                }
+                Map<String, String> options = literalOptions(st.options, Set.of("mode", "description"));
+                TableMode mode = mode(options.get("mode"), line);
+                yield apply(line, () -> new Resource.ContextTable(topic, mode, options.get("description")), true, text);
             }
-            if (options.put(key, value) != null) {
-                throw error(keyToken, "duplicate option " + key);
+            case DISABLE -> {
+                noOptions(st);
+                yield new Statement.Remove(st.object.equals("ICEBERG") ? ResourceKind.ICEBERG_TABLE : ResourceKind.CONTEXT_TABLE,
+                        topic(st.name), true, text);
             }
-        } while (acceptSymbol(","));
-        expectSymbol(")");
-        return options;
+            case GRANT -> apply(line, () -> grant(st), true, text);
+            case REVOKE -> new Statement.Remove(ResourceKind.GRANT, build(line, () -> grant(st), null).name(), true, text);
+            case DROP -> new Statement.Remove(kind(st.object), name(st.name), st.ifExists, text);
+            case SHOW -> new Statement.Show(st.object.equals("TOPICS") ? null : kind(st.object), text);
+            case DESCRIBE -> {
+                ResourceKind kind = kind(st.object);
+                boolean topicName = kind == ResourceKind.ICEBERG_TABLE || kind == ResourceKind.CONTEXT_TABLE;
+                yield new Statement.Describe(kind, topicName ? topic(st.name) : name(st.name), text);
+            }
+        };
     }
 
-    /** Optional {@code WITH (...)} clause restricted to literal values and the given keys. */
-    private Map<String, String> literalOptions(Map<String, String> defaults, String... allowed) {
-        Map<String, String> result = new LinkedHashMap<>(defaults);
-        if (!acceptWord("WITH")) {
-            return result;
+    private static Resource.Grant grant(SqlStreamhouseStatement st) {
+        return new Resource.Grant(Privilege.SELECT, ResourceKind.CONTEXT_TABLE, topic(st.name), name(st.target));
+    }
+
+    private static ResourceKind kind(String object) {
+        return switch (object) {
+            case "CONNECTION" -> ResourceKind.CONNECTION;
+            case "SOURCE" -> ResourceKind.SOURCE;
+            case "MATERIALIZED VIEW" -> ResourceKind.MATERIALIZED_VIEW;
+            case "STATEMENT" -> ResourceKind.STATEMENT;
+            case "ICEBERG" -> ResourceKind.ICEBERG_TABLE;
+            case "CONTEXT" -> ResourceKind.CONTEXT_TABLE;
+            case "GRANT" -> ResourceKind.GRANT;
+            default -> throw new IllegalStateException("unknown object kind " + object);
+        };
+    }
+
+    private static TableMode mode(String value, int line) {
+        if (value == null) {
+            return null;
         }
-        Token start = peek();
-        for (Map.Entry<String, OptionValue> e : options().entrySet()) {
-            if (!List.of(allowed).contains(e.getKey())) {
-                throw error(start, "unknown option " + e.getKey() + "; allowed: " + String.join(", ", allowed));
+        return build(line, () -> TableMode.valueOf(value.toUpperCase(Locale.ROOT)),
+                "mode must be 'append' or 'upsert', got '" + value + "'");
+    }
+
+    private static Map<String, OptionValue> connectionOptions(List<Option> options) {
+        Map<String, OptionValue> result = new LinkedHashMap<>();
+        for (Option option : options) {
+            OptionValue value = option.secret() ? new OptionValue.Secret(literal(option)) : new OptionValue.Literal(literal(option));
+            if (result.put(option.key(), value) != null) {
+                throw new SqlParseException("duplicate option " + option.key(), option.pos().getLineNum());
             }
-            if (!(e.getValue() instanceof OptionValue.Literal literal)) {
-                throw error(start, "option " + e.getKey() + " cannot be a secret");
-            }
-            result.put(e.getKey(), literal.value());
         }
         return result;
     }
 
-    private String optionKey() {
-        Token t = peek();
-        if (t.type() == Type.STRING) {
-            pos++;
-            return t.text();
+    /** Options restricted to the given keys and to literal values. */
+    private static Map<String, String> literalOptions(List<Option> options, Set<String> allowed) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Option option : options) {
+            int line = option.pos().getLineNum();
+            if (!allowed.contains(option.key())) {
+                throw new SqlParseException("unknown option " + option.key() + "; allowed: "
+                        + String.join(", ", allowed.stream().sorted().toList()), line);
+            }
+            if (option.secret()) {
+                throw new SqlParseException("option " + option.key() + " cannot be a secret", line);
+            }
+            if (result.put(option.key(), literal(option)) != null) {
+                throw new SqlParseException("duplicate option " + option.key(), line);
+            }
         }
-        StringBuilder key = new StringBuilder(identifier());
-        while (acceptSymbol(".")) {
-            key.append('.').append(identifier());
-        }
-        return key.toString();
+        return result;
     }
 
-    private String literal() {
-        Token t = peek();
-        if (t.type() == Type.STRING || t.type() == Type.NUMBER) {
-            pos++;
-            return t.text();
+    private static void noOptions(SqlStreamhouseStatement st) {
+        if (!st.options.isEmpty()) {
+            throw new SqlParseException("DISABLE takes no options", st.options.getFirst().pos().getLineNum());
         }
-        if (t.isWord("TRUE") || t.isWord("FALSE")) {
-            pos++;
-            return t.text().toLowerCase(Locale.ROOT);
-        }
-        throw error(t, "expected a string, number or boolean");
     }
 
-    private List<String> identifierList() {
-        List<String> names = new ArrayList<>();
-        expectSymbol("(");
-        do {
-            names.add(identifier());
-        } while (acceptSymbol(","));
-        expectSymbol(")");
-        return names;
+    private static String literal(Option option) {
+        if (!(option.value() instanceof SqlLiteral literal) || literal.getValue() == null) {
+            throw new SqlParseException("option " + option.key() + " needs a string, number or boolean",
+                    option.pos().getLineNum());
+        }
+        return switch (literal) {
+            case SqlCharStringLiteral string -> string.getValueAs(String.class);
+            case SqlLiteral bool when bool.getTypeName() == SqlTypeName.BOOLEAN -> String.valueOf(bool.booleanValue());
+            default -> literal.toValue();
+        };
     }
 
-    /** A possibly dotted topic name such as {@code shop.public.orders}, or a quoted identifier. */
-    private String topicName() {
-        StringBuilder name = new StringBuilder(identifier());
-        while (acceptSymbol(".")) {
-            name.append('.').append(identifier());
+    private static String name(SqlIdentifier id) {
+        if (!id.isSimple()) {
+            throw new SqlParseException("expected a simple name, got " + String.join(".", id.names),
+                    id.getParserPosition().getLineNum());
         }
-        return name.toString();
+        return id.getSimple();
     }
 
-    private String identifier() {
-        Token t = peek();
-        if (t.type() == Type.WORD) {
-            pos++;
-            return t.text().toLowerCase(Locale.ROOT);
-        }
-        if (t.type() == Type.QUOTED_IDENTIFIER) {
-            pos++;
-            return t.text();
-        }
-        throw error(t, "expected an identifier");
+    /** Topic names may be written unquoted with dots (shop.public.orders) or quoted (`shop.public.orders`). */
+    private static String topic(SqlIdentifier id) {
+        return String.join(".", id.names);
     }
 
-    /** Everything from the current token up to (excluding) the statement-terminating {@code ;}. */
-    private String rawUntilEndOfStatement() {
-        int start = peek().start();
-        int end = start;
-        while (peek().type() != Type.SEMICOLON && peek().type() != Type.EOF) {
-            end = tokens.get(pos++).end();
-        }
-        if (end == start) {
-            throw error(peek(), "expected a query");
-        }
-        return input.substring(start, end);
+    private static Statement apply(int line, Supplier<Resource> resource, boolean orReplace, String text) {
+        return new Statement.Apply(build(line, resource, null), orReplace, text);
     }
 
-    private <T> T build(Token at, java.util.function.Supplier<T> constructor) {
+    /** Runs a model constructor, reporting its validation errors at the statement's line. */
+    private static <T> T build(int line, Supplier<T> constructor, String message) {
         try {
             return constructor.get();
         } catch (IllegalArgumentException e) {
-            throw error(at, e.getMessage());
+            throw new SqlParseException(message != null ? message : e.getMessage(), line);
         }
     }
 
-    private Token peek() {
-        return tokens.get(pos);
+    /** The original text between two positions (lines and columns are 1-based, end inclusive). */
+    private String slice(SqlParserPos pos) {
+        int start = lineStarts[pos.getLineNum() - 1] + pos.getColumnNum() - 1;
+        int end = lineStarts[pos.getEndLineNum() - 1] + pos.getEndColumnNum();
+        return input.substring(start, Math.min(end, input.length()));
     }
 
-    private boolean acceptWord(String word) {
-        if (peek().isWord(word)) {
-            pos++;
-            return true;
+    private static SqlParseException syntaxError(org.apache.calcite.sql.parser.SqlParseException e) {
+        SqlParserPos pos = e.getPos();
+        String first = e.getMessage().lines().findFirst().orElse(e.getMessage());
+        String found = first.startsWith("Encountered ") && first.contains("\" at line")
+                ? first.substring("Encountered ".length(), first.indexOf(" at line"))
+                : null;
+        // Calcite lists every identifier token kind (<IDENTIFIER>, <BACK_QUOTED_IDENTIFIER>, ...): say "a name".
+        List<String> expected = e.getExpectedTokenNames().stream()
+                .map(t -> t.contains("IDENTIFIER") ? "a name" : t.replace("\"", ""))
+                .distinct().sorted().toList();
+        String message;
+        if (found != null && !expected.isEmpty() && expected.size() <= 12) {
+            message = "syntax error at " + found + "; expected " + String.join(", ", expected);
+        } else if (found != null) {
+            message = "syntax error at " + found;
+        } else {
+            message = first.replaceFirst("^org\\.apache\\.calcite\\.[\\w.]+: ", "");
         }
-        return false;
-    }
-
-    private boolean acceptSymbol(String symbol) {
-        if (peek().isSymbol(symbol)) {
-            pos++;
-            return true;
-        }
-        return false;
-    }
-
-    private void expectWord(String word) {
-        if (!acceptWord(word)) {
-            throw error(peek(), "expected " + word);
-        }
-    }
-
-    private void expectSymbol(String symbol) {
-        if (!acceptSymbol(symbol)) {
-            throw error(peek(), "expected '" + symbol + "'");
-        }
-    }
-
-    private Token expect(Type type, String what) {
-        Token t = peek();
-        if (t.type() != type) {
-            throw error(t, "expected " + what);
-        }
-        pos++;
-        return t;
-    }
-
-    private static SqlParseException error(Token at, String message) {
-        String found = at.type() == Type.EOF ? "end of input" : "'" + at.text() + "'";
-        return new SqlParseException(message + " (found " + found + ")", at.line());
+        return new SqlParseException(message, pos == null ? 1 : pos.getLineNum());
     }
 }

@@ -9,7 +9,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.streamhouseoss.controlplane.clients.KafkaTopics;
-import org.streamhouseoss.controlplane.flink.FlinkDdl;
 import org.streamhouseoss.controlplane.lineage.Edge;
 import org.streamhouseoss.controlplane.reconcile.ReconcileLoop;
 import org.streamhouseoss.controlplane.reconcile.Topology;
@@ -53,13 +52,11 @@ public class SqlService {
     private final DesiredState state;
     private final ReconcileLoop loop;
     private final KafkaTopics topics;
-    private final FlinkDdl ddl;
 
-    public SqlService(DesiredState state, ReconcileLoop loop, KafkaTopics topics, FlinkDdl ddl) {
+    public SqlService(DesiredState state, ReconcileLoop loop, KafkaTopics topics) {
         this.state = state;
         this.loop = loop;
         this.topics = topics;
-        this.ddl = ddl;
     }
 
     public ScriptResult execute(String script, SecurityIdentity identity) {
@@ -109,7 +106,7 @@ public class SqlService {
         requireRole(identity, resource instanceof Resource.Grant ? GRANTORS : WRITERS, apply.text());
         validate(resource, Topology.of(state.list(null)));
         DesiredState.ApplyOutcome outcome = state.apply(resource, apply.text(), identity.getPrincipal().getName(), apply.orReplace());
-        String what = label(resource.kind()) + " " + display(resource);
+        String what = resource.kind().label() + " " + display(resource);
         return StatementResult.ok(apply.text(), switch (outcome) {
             case CREATED -> what + " created";
             case UPDATED -> what + " updated";
@@ -120,7 +117,7 @@ public class SqlService {
     private void validate(Resource resource, Topology topology) {
         switch (resource) {
             case Resource.Connection c -> {
-                List<String> missing = List.of("host", "database", "user", "password").stream()
+                List<String> missing = Resource.Connection.REQUIRED_OPTIONS.stream()
                         .filter(k -> !c.options().containsKey(k)).toList();
                 if (!missing.isEmpty()) {
                     throw new IllegalArgumentException("connection " + c.name() + " is missing option(s) " + String.join(", ", missing));
@@ -173,35 +170,29 @@ public class SqlService {
         Optional<StoredResource> existing = topology.find(remove.kind(), remove.name());
         if (existing.isEmpty()) {
             if (remove.ifExists()) {
-                return StatementResult.ok(remove.text(), label(remove.kind()) + " " + remove.name() + " does not exist; nothing to do");
+                return StatementResult.ok(remove.text(), remove.kind().label() + " " + remove.name() + " does not exist; nothing to do");
             }
-            throw new ConflictException(label(remove.kind()) + " " + remove.name() + " does not exist");
+            throw new ConflictException(remove.kind().label() + " " + remove.name() + " does not exist");
         }
         List<String> dependents = dependents(existing.get().resource(), topology);
         if (!dependents.isEmpty()) {
-            throw new ConflictException("cannot drop " + label(remove.kind()) + " " + remove.name() + ": used by "
+            throw new ConflictException("cannot drop " + remove.kind().label() + " " + remove.name() + ": used by "
                     + String.join(", ", dependents));
         }
         state.markDeleted(remove.kind(), remove.name());
-        return StatementResult.ok(remove.text(), label(remove.kind()) + " " + display(existing.get().resource()) + " dropped");
+        return StatementResult.ok(remove.text(), remove.kind().label() + " " + display(existing.get().resource()) + " dropped");
     }
 
     private List<String> dependents(Resource resource, Topology topology) {
-        List<String> producedTopics = switch (resource) {
-            case Resource.Source s -> s.tables().stream().map(s::topicFor).toList();
-            case Resource.MaterializedView mv -> List.of(mv.name());
-            case Resource.Statement st -> org.streamhouseoss.controlplane.reconcile.StatementReconciler.target(st.sql()).stream().toList();
-            default -> List.of();
-        };
         List<String> dependents = new ArrayList<>();
         if (resource instanceof Resource.Connection c) {
             topology.all(Resource.Source.class).filter(s -> s.connection().equals(c.name()))
                     .forEach(s -> dependents.add("source " + s.name()));
         }
-        for (String topic : producedTopics) {
+        for (String topic : Topology.producedBy(resource)) {
             topology.consumersOf(topic).stream()
                     .filter(r -> !(r.resource().equals(resource)))
-                    .forEach(r -> dependents.add(label(r.kind()) + " " + r.name()));
+                    .forEach(r -> dependents.add(r.kind().label() + " " + r.name()));
         }
         return dependents.stream().distinct().toList();
     }
@@ -212,15 +203,13 @@ public class SqlService {
         if (show.kind() == null) {
             Topology topology = Topology.of(state.list(null));
             Map<String, String> producers = new LinkedHashMap<>();
-            topology.all(Resource.Source.class).forEach(s -> s.tables().forEach(t -> producers.put(s.topicFor(t), "source " + s.name())));
-            topology.all(Resource.MaterializedView.class).forEach(mv -> producers.put(mv.name(), "materialized view " + mv.name()));
-            topology.all(Resource.Statement.class).forEach(st -> org.streamhouseoss.controlplane.reconcile.StatementReconciler
-                    .target(st.sql()).ifPresent(t -> producers.put(t, "statement " + st.name())));
+            topology.resources().forEach(r -> Topology.producedBy(r.resource())
+                    .forEach(t -> producers.put(t, r.kind().label() + " " + r.name())));
             List<List<Object>> rows = topics.list().stream()
                     .filter(t -> !t.startsWith("_") && !t.startsWith("connect-") && !t.startsWith("__"))
                     .sorted()
                     .map(t -> List.<Object>of(t, producers.getOrDefault(t, ""),
-                            topology.consumersOf(t).stream().map(r -> label(r.kind()) + " " + r.name()).collect(Collectors.joining(", "))))
+                            topology.consumersOf(t).stream().map(r -> r.kind().label() + " " + r.name()).collect(Collectors.joining(", "))))
                     .toList();
             return StatementResult.rows(show.text(), List.of("topic", "produced_by", "used_by"), rows);
         }
@@ -232,7 +221,7 @@ public class SqlService {
 
     private StatementResult describe(Statement.Describe describe) {
         StoredResource r = state.get(describe.kind(), describe.name())
-                .orElseThrow(() -> new ConflictException(label(describe.kind()) + " " + describe.name() + " does not exist"));
+                .orElseThrow(() -> new ConflictException(describe.kind().label() + " " + describe.name() + " does not exist"));
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("name", display(r.resource())));
         rows.add(List.of("status", r.phase().name()));
@@ -242,27 +231,13 @@ public class SqlService {
         r.details().forEach((k, v) -> rows.add(List.of(k, String.valueOf(v))));
         List<Edge> upstream = new ArrayList<>();
         List<Edge> downstream = new ArrayList<>();
-        for (String dataset : datasets(r.resource())) {
+        for (String dataset : state.producedDatasets(r.kind(), r.name())) {
             upstream.addAll(state.lineage(dataset, true));
             downstream.addAll(state.lineage(dataset, false));
         }
         rows.add(List.of("upstream", formatEdges(upstream)));
         rows.add(List.of("downstream", formatEdges(downstream)));
         return StatementResult.rows(describe.text(), List.of("property", "value"), rows);
-    }
-
-    /** The datasets a resource produces, used as anchors for lineage queries. */
-    private List<String> datasets(Resource resource) {
-        return switch (resource) {
-            case Resource.Connection c -> List.of();
-            case Resource.Source s -> s.tables().stream().map(t -> Edge.kafka(s.topicFor(t))).toList();
-            case Resource.MaterializedView mv -> List.of(Edge.kafka(mv.name()));
-            case Resource.Statement st -> org.streamhouseoss.controlplane.reconcile.StatementReconciler.target(st.sql())
-                    .map(t -> List.of(Edge.kafka(t))).orElse(List.of());
-            case Resource.IcebergTable it -> List.of(Edge.iceberg(ddl.namespace(), FlinkDdl.icebergTableFor(it.name())));
-            case Resource.ContextTable ct -> List.of(Edge.context(ct.name()));
-            case Resource.Grant g -> List.of(Edge.context(g.objectName()));
-        };
     }
 
     private static String formatEdges(List<Edge> edges) {
@@ -276,18 +251,6 @@ public class SqlService {
             throw new ForbiddenException("requires one of the roles " + roles.stream().sorted().toList() + " to run: "
                     + statement.lines().findFirst().orElse(statement));
         }
-    }
-
-    static String label(ResourceKind kind) {
-        return switch (kind) {
-            case CONNECTION -> "connection";
-            case SOURCE -> "source";
-            case MATERIALIZED_VIEW -> "materialized view";
-            case STATEMENT -> "statement";
-            case ICEBERG_TABLE -> "iceberg table";
-            case CONTEXT_TABLE -> "context table";
-            case GRANT -> "grant";
-        };
     }
 
     static String display(Resource resource) {

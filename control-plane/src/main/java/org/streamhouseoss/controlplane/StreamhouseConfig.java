@@ -5,17 +5,18 @@ import java.time.Duration;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 
+/**
+ * Control plane settings. Service endpoints are REST client settings
+ * ({@code quarkus.rest-client.<service>.url}); this holds the rest.
+ */
 @ConfigMapping(prefix = "streamhouse")
 public interface StreamhouseConfig {
 
-    /** Confluent-compatible schema registry API, as reached by the control plane. */
-    String registryUrl();
+    @WithDefault("streamhouse")
+    String metalake();
 
-    String connectUrl();
-
-    String gravitinoUrl();
-
-    String contextEngineUrl();
+    @WithDefault("5s")
+    Duration reconcileInterval();
 
     Flink flink();
 
@@ -23,27 +24,9 @@ public interface StreamhouseConfig {
 
     Topics topics();
 
-    @WithDefault("streamhouse")
-    String metalake();
-
-    /** Iceberg namespace that topics are materialized into. */
-    @WithDefault("streamhouse")
-    String icebergNamespace();
-
-    @WithDefault("5s")
-    Duration reconcileInterval();
-
-    @WithDefault("_streamhouse.audit")
-    String auditTopic();
+    Lake lake();
 
     interface Flink {
-        String gatewayUrl();
-
-        String jobmanagerUrl();
-
-        @WithDefault("10s")
-        Duration checkpointInterval();
-
         /** Catalog exposing Kafka topics as tables (the flink-catalog module); statements run in it. */
         @WithDefault("streamhouse")
         String topicCatalog();
@@ -52,15 +35,40 @@ public interface StreamhouseConfig {
         String topicDatabase();
     }
 
-    /** Addresses rendered into connector and Flink configs; they are resolved inside the platform network. */
+    /** Addresses rendered into connector configs; they are resolved inside the platform network. */
     interface Internal {
         String kafkaBootstrap();
 
-        String registryUrl();
-
         String apicurioUrl();
+    }
 
-        String icebergRestUrl();
+    interface Topics {
+        @WithDefault("1")
+        int partitions();
+
+        @WithDefault("1")
+        short replicationFactor();
+    }
+
+    /**
+     * The Iceberg catalog Flink writes to. Flink registers it itself (deploy/compose/flink/catalogs/lake.yaml);
+     * these settings register the same tables in Gravitino for browsing.
+     */
+    interface Lake {
+        @WithDefault("streamhouse")
+        String namespace();
+
+        @WithDefault("jdbc:postgresql://platform-db:5432/iceberg")
+        String jdbcUrl();
+
+        @WithDefault("streamhouse")
+        String jdbcUser();
+
+        @WithDefault("streamhouse")
+        String jdbcPassword();
+
+        @WithDefault("s3://warehouse/")
+        String warehouse();
 
         String s3Endpoint();
 
@@ -70,13 +78,5 @@ public interface StreamhouseConfig {
 
         @WithDefault("us-east-1")
         String s3Region();
-    }
-
-    interface Topics {
-        @WithDefault("1")
-        int partitions();
-
-        @WithDefault("1")
-        short replicationFactor();
     }
 }

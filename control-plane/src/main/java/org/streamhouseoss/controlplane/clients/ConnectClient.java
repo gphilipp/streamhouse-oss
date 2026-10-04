@@ -1,16 +1,17 @@
 package org.streamhouseoss.controlplane.clients;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 
-import org.streamhouseoss.controlplane.StreamhouseConfig;
+import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.jboss.resteasy.reactive.RestResponse;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
-/** Kafka Connect REST API. */
+/** Connector lifecycle on Kafka Connect. */
 @ApplicationScoped
 public class ConnectClient {
 
@@ -21,23 +22,23 @@ public class ConnectClient {
         }
     }
 
-    private final JsonHttp http;
+    private final ConnectApi api;
 
-    public ConnectClient(StreamhouseConfig config, ObjectMapper mapper) {
-        this.http = new JsonHttp(mapper, config.connectUrl(), Map.of());
+    public ConnectClient(@RestClient ConnectApi api) {
+        this.api = api;
     }
 
     /** Creates or updates a connector (idempotent). */
     public void put(String name, Map<String, String> config) {
-        http.put("/connectors/" + name + "/config", config).requireOk("configuring connector " + name);
+        Http.ok(api.putConfig(name, config), "configuring connector " + name);
     }
 
     public Optional<ConnectorStatus> status(String name) {
-        JsonHttp.Response response = http.get("/connectors/" + name + "/status");
-        if (response.status() == 404) {
+        RestResponse<JsonNode> response = api.status(name);
+        if (Http.notFound(response)) {
             return Optional.empty();
         }
-        JsonNode body = response.requireOk("reading status of connector " + name).body();
+        JsonNode body = Http.ok(response, "reading status of connector " + name).getEntity();
         String failedTrace = null;
         for (JsonNode task : body.path("tasks")) {
             if ("FAILED".equals(task.path("state").asText())) {
@@ -52,7 +53,7 @@ public class ConnectClient {
     }
 
     public void restartFailed(String name) {
-        http.post("/connectors/" + name + "/restart?includeTasks=true&onlyFailed=true", null);
+        api.restart(name, true, true);
     }
 
     /**
@@ -63,23 +64,13 @@ public class ConnectClient {
         if (status(name).isEmpty()) {
             return;
         }
-        http.put("/connectors/" + name + "/stop", null).requireOk("stopping connector " + name);
-        java.time.Instant deadline = java.time.Instant.now().plusSeconds(30);
-        while (!"STOPPED".equals(status(name).map(ConnectorStatus::connectorState).orElse("STOPPED"))) {
-            if (java.time.Instant.now().isAfter(deadline)) {
-                throw new ComponentException("connector " + name + " did not stop");
-            }
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new ComponentException("interrupted", e);
-            }
-        }
-        http.delete("/connectors/" + name + "/offsets").requireOk("resetting offsets of connector " + name);
-        JsonHttp.Response response = http.delete("/connectors/" + name);
-        if (response.status() != 404) {
-            response.requireOk("deleting connector " + name);
+        Http.ok(api.stop(name), "stopping connector " + name);
+        Poll.until(() -> status(name).map(s -> "STOPPED".equals(s.connectorState())).orElse(true),
+                Duration.ofSeconds(30), Duration.ofMillis(500), "connector " + name + " to stop");
+        Http.ok(api.resetOffsets(name), "resetting offsets of connector " + name);
+        RestResponse<Void> deleted = api.delete(name);
+        if (!Http.notFound(deleted)) {
+            Http.ok(deleted, "deleting connector " + name);
         }
     }
 }

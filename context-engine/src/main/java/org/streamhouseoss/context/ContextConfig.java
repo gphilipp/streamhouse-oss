@@ -1,10 +1,12 @@
 package org.streamhouseoss.context;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.Set;
 
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
+import io.smallrye.config.WithName;
 
 @ConfigMapping(prefix = "streamhouse.context")
 public interface ContextConfig {
@@ -35,7 +37,7 @@ public interface ContextConfig {
     @WithDefault("admin,engineer")
     Set<String> superRoles();
 
-    /** Kafka topic receiving audit events; empty disables Kafka audit publishing. */
-    @WithDefault("_streamhouse.audit")
-    String auditTopic();
+    /** API keys: OIDC client id/secret exchanged here for a token. Defaults to the realm's Keycloak token endpoint. */
+    @WithName("api-key.token-url")
+    Optional<String> apiKeyTokenUrl();
 }

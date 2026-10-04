@@ -4,7 +4,7 @@ package org.streamhouseoss.context.query;
 public class QueryException extends RuntimeException {
 
     public enum Reason {
-        INVALID, NOT_FOUND, FORBIDDEN, TIMEOUT
+        INVALID, NOT_FOUND, TIMEOUT
     }
 
     private final Reason reason;

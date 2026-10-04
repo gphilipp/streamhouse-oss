@@ -9,12 +9,10 @@ import org.apache.avro.Schema;
 import org.streamhouseoss.context.schema.AvroColumns;
 import org.streamhouseoss.context.schema.Column;
 import org.streamhouseoss.context.schema.SchemaException;
-import org.streamhouseoss.model.TableMode;
+import org.streamhouseoss.context.store.TableMode;
 
 /** The columns and key of a serving table, derived from a topic's key and value schemas. */
 record Layout(List<String> keyColumns, List<Column> columns) {
-
-    static final Layout EMPTY = new Layout(List.of(), List.of());
 
     Layout {
         keyColumns = List.copyOf(keyColumns);

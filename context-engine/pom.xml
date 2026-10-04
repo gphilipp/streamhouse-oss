@@ -13,10 +13,6 @@
   <description>Materializes Kafka topics into a low-latency serving store and exposes lightning queries over REST and MCP.</description>
 
   <dependencies>
-    <dependency>
-      <groupId>org.streamhouseoss</groupId>
-      <artifactId>streamhouse-model</artifactId>
-    </dependency>
 
     <dependency>
       <groupId>io.quarkus</groupId>
@@ -25,6 +21,14 @@
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-oidc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-oidc-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest-client-jackson</artifactId>
     </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>

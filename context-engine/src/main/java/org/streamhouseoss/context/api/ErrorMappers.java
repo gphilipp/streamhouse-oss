@@ -15,7 +15,6 @@ public class ErrorMappers {
         RestResponse.Status status = switch (e.reason()) {
             case INVALID -> RestResponse.Status.BAD_REQUEST;
             case NOT_FOUND -> RestResponse.Status.NOT_FOUND;
-            case FORBIDDEN -> RestResponse.Status.FORBIDDEN;
             case TIMEOUT -> RestResponse.Status.SERVICE_UNAVAILABLE;
         };
         return RestResponse.status(status, Map.of("error", e.getMessage()));

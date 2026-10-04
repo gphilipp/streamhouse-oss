@@ -8,7 +8,7 @@ import org.jboss.resteasy.reactive.RestResponse;
 import org.streamhouseoss.context.ingest.MaterializerManager;
 import org.streamhouseoss.context.store.ServingStore;
 import org.streamhouseoss.context.store.TableInfo;
-import org.streamhouseoss.model.TableMode;
+import org.streamhouseoss.context.store.TableMode;
 
 import io.smallrye.common.annotation.Blocking;
 import jakarta.annotation.security.RolesAllowed;

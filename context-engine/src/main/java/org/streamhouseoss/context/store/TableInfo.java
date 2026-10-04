@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Optional;
 
 import org.streamhouseoss.context.schema.Column;
-import org.streamhouseoss.model.TableMode;
 
 /** Definition and state of one context table, as stored in {@code serving._tables}. */
 public record TableInfo(

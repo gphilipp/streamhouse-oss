@@ -5,12 +5,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Base64;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -61,7 +62,7 @@ public class QueryService {
     private final ObjectMapper mapper;
     private final LightningQueryCompiler compiler;
     private final ContextConfig config;
-    private final MeterRegistry meters;
+    private final Map<AuditLog.Channel, Timer> timers = new EnumMap<>(AuditLog.Channel.class);
 
     public QueryService(Access access, AuditLog audit, ServingStore store, MaterializerManager materializers,
             ObjectMapper mapper, ContextConfig config, MeterRegistry meters) {
@@ -71,7 +72,9 @@ public class QueryService {
         this.materializers = materializers;
         this.mapper = mapper;
         this.config = config;
-        this.meters = meters;
+        for (AuditLog.Channel channel : AuditLog.Channel.values()) {
+            timers.put(channel, Timer.builder("streamhouse.context.query").tag("channel", channel.name()).register(meters));
+        }
         this.compiler = new LightningQueryCompiler(config.maxRows(), config.defaultRows());
     }
 
@@ -84,8 +87,7 @@ public class QueryService {
 
     public TableMetadata metadata(Access.Caller caller, String name) {
         Map<String, TableInfo> visible = visible(caller);
-        TableInfo t = visible.values().stream().filter(v -> v.topic().equals(name)).findFirst()
-                .or(() -> visible.values().stream().filter(v -> v.topic().equalsIgnoreCase(name)).findFirst())
+        TableInfo t = LightningQueryCompiler.resolve(name, visible.keySet()).map(visible::get)
                 .orElseThrow(() -> new QueryException(QueryException.Reason.NOT_FOUND,
                         "table " + name + " does not exist or you are not allowed to query it"));
         List<ColumnInfo> columns = t.columns().stream()
@@ -114,21 +116,23 @@ public class QueryService {
                 result = execute(compiler.compile(parsed, table), table, start);
             }
             audit.record(new AuditLog.Entry(channel, caller, topic, sql, AuditLog.Outcome.OK, result.rowCount(), result.elapsedMs(), null));
-            Timer.builder("streamhouse.context.query").tag("channel", channel.name()).register(meters)
-                    .record(java.time.Duration.ofNanos(System.nanoTime() - start));
+            timers.get(channel).record(Duration.ofNanos(System.nanoTime() - start));
             return result;
-        } catch (QueryException e) {
-            AuditLog.Outcome outcome = switch (e.reason()) {
-                case NOT_FOUND, FORBIDDEN -> AuditLog.Outcome.DENIED;
-                case INVALID -> AuditLog.Outcome.INVALID;
-                case TIMEOUT -> AuditLog.Outcome.ERROR;
-            };
-            audit.record(new AuditLog.Entry(channel, caller, topic, sql, outcome, null, elapsedMs(start), e.getMessage()));
-            throw e;
         } catch (RuntimeException e) {
-            audit.record(new AuditLog.Entry(channel, caller, topic, sql, AuditLog.Outcome.ERROR, null, elapsedMs(start), e.getMessage()));
+            audit.record(new AuditLog.Entry(channel, caller, topic, sql, outcome(e), null, elapsedMs(start), e.getMessage()));
             throw e;
         }
+    }
+
+    private static AuditLog.Outcome outcome(RuntimeException e) {
+        if (!(e instanceof QueryException q)) {
+            return AuditLog.Outcome.ERROR;
+        }
+        return switch (q.reason()) {
+            case NOT_FOUND -> AuditLog.Outcome.DENIED; // unknown and forbidden tables look the same
+            case INVALID -> AuditLog.Outcome.INVALID;
+            case TIMEOUT -> AuditLog.Outcome.ERROR;
+        };
     }
 
     private Map<String, TableInfo> visible(Access.Caller caller) {
@@ -189,10 +193,6 @@ public class QueryService {
             case "timestamp" -> rs.getObject(i, LocalDateTime.class);
             case "date" -> rs.getObject(i, LocalDate.class);
             case "time" -> rs.getObject(i, LocalTime.class);
-            case "bytea" -> {
-                byte[] bytes = rs.getBytes(i);
-                yield bytes == null ? null : Base64.getEncoder().encodeToString(bytes);
-            }
             case "jsonb", "json" -> {
                 String json = rs.getString(i);
                 try {

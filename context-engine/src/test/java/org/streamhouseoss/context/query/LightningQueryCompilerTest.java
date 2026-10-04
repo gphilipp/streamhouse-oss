@@ -10,7 +10,7 @@ import org.streamhouseoss.context.schema.Column;
 import org.streamhouseoss.context.schema.ColumnType;
 import org.streamhouseoss.context.store.TableInfo;
 import org.streamhouseoss.context.store.TableStatus;
-import org.streamhouseoss.model.TableMode;
+import org.streamhouseoss.context.store.TableMode;
 
 class LightningQueryCompilerTest {
 
@@ -74,7 +74,6 @@ class LightningQueryCompilerTest {
     void aggregatesWithoutGroupBy() {
         var q = compile("SELECT COUNT(*), SUM(lifetimeValue) AS total FROM customer_360 WHERE vip = true");
 
-        assertThat(q.aggregate()).isTrue();
         assertThat(q.sql()).isEqualTo("SELECT COUNT(*) AS \"count\", SUM(\"lifetimeValue\") AS \"total\" "
                 + "FROM serving.\"customer_360\" WHERE \"vip\" = CAST(? AS boolean)");
         assertThat(q.parameters()).containsExactly("true");

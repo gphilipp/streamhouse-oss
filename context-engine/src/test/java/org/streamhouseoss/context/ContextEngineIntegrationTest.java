@@ -25,7 +25,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.streamhouseoss.context.ingest.MaterializerManager;
 import org.streamhouseoss.context.store.ServingStore;
-import org.streamhouseoss.model.TableMode;
+import org.streamhouseoss.context.store.TableMode;
 
 import io.quarkus.test.common.QuarkusTestResource;
 import io.quarkus.test.junit.QuarkusTest;

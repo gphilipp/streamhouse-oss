@@ -1,7 +1,6 @@
 package org.streamhouseoss.flink.catalog;
 
 import java.lang.reflect.Method;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -10,9 +9,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import org.apache.flink.formats.avro.typeutils.AvroSchemaConverter;
 import org.apache.flink.table.api.DataTypes;
@@ -33,12 +29,14 @@ import org.apache.flink.table.types.logical.RowType;
  *
  * <ul>
  * <li>Inference (existing topics): value fields from the {@code <topic>-value} Avro schema; key
- * fields from an Avro record {@code <topic>-key}, otherwise one raw {@code key VARBINARY} column;
- * key columns get the {@code key_} prefix when their names collide with value fields; compacted
- * topics are {@code upsert}, Debezium envelopes {@code retract}, everything else {@code append}.</li>
+ * fields from an Avro record {@code <topic>-key}, otherwise one raw {@code key} column (STRING when
+ * {@code <topic>-key} is the primitive {@code "string"}, BYTES otherwise); key columns get the
+ * {@code key_} prefix when their names collide with value fields; compacted topics are
+ * {@code upsert}, Debezium envelopes {@code retract}, everything else {@code append}.</li>
  * <li>Creation (CREATE TABLE / CTAS): Confluent-style options are validated and turned into a
  * {@link TableSpec} plus topic settings (partitions from {@code DISTRIBUTED BY ... INTO n BUCKETS},
- * cleanup policy, retention).</li>
+ * cleanup policy). Everything inference needs later lives in the registry and the topic config: a
+ * raw key is recorded as a primitive schema under {@code <topic>-key}.</li>
  * <li>Rendering: a {@link TableSpec} becomes a Flink {@code kafka}/{@code upsert-kafka}
  * {@link CatalogTable} with a {@code $rowtime} column and a 180 ms bounded-out-of-orderness
  * watermark.</li>
@@ -51,11 +49,10 @@ final class TableTranslator {
 
     /** Options accepted in CREATE TABLE ... WITH (...). */
     static final Set<String> SUPPORTED_OPTIONS = Set.of("connector", "changelog.mode", "key.format", "value.format",
-            "value.fields-include", "key.fields-prefix", "scan.startup.mode", "kafka.cleanup-policy",
-            "kafka.retention.time");
+            "kafka.cleanup-policy");
 
     /** Kafka topic settings derived from a CREATE TABLE. */
-    record TopicSettings(int partitions, String cleanupPolicy, Optional<Long> retentionMs) {
+    record TopicSettings(int partitions, String cleanupPolicy) {
     }
 
     /** The result of translating a CREATE TABLE. */
@@ -84,8 +81,7 @@ final class TableTranslator {
         if (after >= 0 && valueNames.contains("before") && valueNames.contains("op")) {
             DataType afterType = DataType.getFieldDataTypes(value).get(after);
             // Debezium envelope: the table is the "after" image, read as a changelog.
-            return new TableSpec(List.of(), columns(afterType.nullable()), null, TableSpec.AVRO_DEBEZIUM, "", false,
-                    TableSpec.RETRACT, null);
+            return new TableSpec(List.of(), columns(afterType.nullable()), null, TableSpec.AVRO_DEBEZIUM, "", TableSpec.RETRACT);
         }
         List<TableSpec.Column> valueColumns = columns(value);
         List<TableSpec.Column> keyColumns;
@@ -95,7 +91,8 @@ final class TableTranslator {
             keyColumns = columns(key).stream().map(c -> new TableSpec.Column(c.name(), c.type().notNull())).toList();
             keyFormat = TableSpec.AVRO;
         } else {
-            keyColumns = List.of(new TableSpec.Column("key", DataTypes.BYTES()));
+            boolean string = key != null && isString(key.getLogicalType());
+            keyColumns = List.of(new TableSpec.Column(TableSpec.RAW_KEY_COLUMN, string ? DataTypes.STRING() : DataTypes.BYTES()));
             keyFormat = TableSpec.RAW;
         }
         Set<String> valueNameSet = new HashSet<>(valueNames);
@@ -107,8 +104,8 @@ final class TableTranslator {
         if (compacted && keyFormat.equals(TableSpec.RAW)) {
             keyColumns = keyColumns.stream().map(c -> new TableSpec.Column(c.name(), c.type().notNull())).toList();
         }
-        return new TableSpec(keyColumns, valueColumns, keyFormat, TableSpec.AVRO, prefix, false,
-                compacted ? TableSpec.UPSERT : TableSpec.APPEND, null);
+        return new TableSpec(keyColumns, valueColumns, keyFormat, TableSpec.AVRO, prefix,
+                compacted ? TableSpec.UPSERT : TableSpec.APPEND);
     }
 
     private static List<TableSpec.Column> columns(DataType row) {
@@ -171,12 +168,6 @@ final class TableTranslator {
         if (valueFormat.equals(TableSpec.RAW)) {
             throw new CatalogException("'value.format' = 'raw' is not supported; use 'avro-registry'");
         }
-        String include = options.getOrDefault("value.fields-include", "except-key").toLowerCase(Locale.ROOT).replace('_', '-');
-        if (!include.equals("except-key") && !include.equals("all")) {
-            throw new CatalogException("'value.fields-include' must be 'all' or 'except-key'");
-        }
-        boolean valueIncludesKey = include.equals("all") || keyNames.isEmpty();
-        String prefix = options.getOrDefault("key.fields-prefix", "");
 
         List<TableSpec.Column> keyColumns = new ArrayList<>();
         for (String name : keyNames) {
@@ -185,19 +176,16 @@ final class TableTranslator {
             keyColumns.add(new TableSpec.Column(name, column.type().notNull()));
         }
         if (TableSpec.RAW.equals(keyFormat)) {
-            if (keyColumns.size() != 1 || !isStringOrBytes(keyColumns.getFirst().type().getLogicalType())) {
-                throw new CatalogException("'key.format' = 'raw' needs exactly one key column of type STRING or BYTES");
+            if (keyColumns.size() != 1 || !keyColumns.getFirst().name().equals(TableSpec.RAW_KEY_COLUMN)
+                    || !isStringOrBytes(keyColumns.getFirst().type().getLogicalType())) {
+                throw new CatalogException("'key.format' = 'raw' needs exactly one key column, named `"
+                        + TableSpec.RAW_KEY_COLUMN + "`, of type STRING or BYTES");
             }
         }
-        List<TableSpec.Column> valueColumns = valueIncludesKey
-                ? physical.stream().map(c -> keyNames.contains(c.name()) ? keyColumns.get(keyNames.indexOf(c.name())) : c).toList()
-                : physical.stream().filter(c -> !keyNames.contains(c.name())).toList();
-        if (!prefix.isEmpty() && keyColumns.stream().anyMatch(c -> !c.name().startsWith(prefix))) {
-            throw new CatalogException("all key columns must start with 'key.fields-prefix' '" + prefix + "'");
-        }
+        // The value never repeats the key (Confluent's default), so inference finds the same columns.
+        List<TableSpec.Column> valueColumns = physical.stream().filter(c -> !keyNames.contains(c.name())).toList();
+        TableSpec spec = new TableSpec(keyColumns, valueColumns, keyFormat, valueFormat, "", mode);
 
-        TableSpec spec = new TableSpec(keyColumns, valueColumns, keyFormat, valueFormat, prefix, valueIncludesKey, mode,
-                options.get("scan.startup.mode"));
         int partitions = distribution.flatMap(TableDistribution::getBucketCount).orElse(defaultPartitions);
         String cleanup = options.getOrDefault("kafka.cleanup-policy", mode.equals(TableSpec.UPSERT) ? "compact" : "delete")
                 .toLowerCase(Locale.ROOT);
@@ -206,14 +194,15 @@ final class TableTranslator {
             case "delete-compact" -> "compact,delete";
             default -> throw new CatalogException("'kafka.cleanup-policy' must be delete, compact or delete-compact");
         };
-        Optional<Long> retention = Optional.ofNullable(options.get("kafka.retention.time")).map(TableTranslator::durationMillis);
-        return new Creation(spec, new TopicSettings(partitions, cleanupPolicy, retention));
+        return new Creation(spec, new TopicSettings(partitions, cleanupPolicy));
+    }
+
+    private static boolean isString(LogicalType type) {
+        return type.getTypeRoot() == LogicalTypeRoot.VARCHAR || type.getTypeRoot() == LogicalTypeRoot.CHAR;
     }
 
     private static boolean isStringOrBytes(LogicalType type) {
-        LogicalTypeRoot root = type.getTypeRoot();
-        return root == LogicalTypeRoot.VARCHAR || root == LogicalTypeRoot.CHAR || root == LogicalTypeRoot.VARBINARY
-                || root == LogicalTypeRoot.BINARY;
+        return isString(type) || type.getTypeRoot() == LogicalTypeRoot.VARBINARY || type.getTypeRoot() == LogicalTypeRoot.BINARY;
     }
 
     private static String format(String value, String option) {
@@ -224,38 +213,17 @@ final class TableTranslator {
         throw new CatalogException("'" + option + "' must be 'avro-registry' or 'raw', got '" + value + "'");
     }
 
-    private static final Pattern DURATION = Pattern.compile("\\s*(\\d+)\\s*([a-z]*)\\s*");
-
-    /** Parses durations like {@code 0}, {@code 604800000 ms}, {@code 7 d}, {@code 12 h}; 0 means infinite (-1). */
-    static long durationMillis(String text) {
-        Matcher m = DURATION.matcher(text.toLowerCase(Locale.ROOT));
-        if (!m.matches()) {
-            throw new CatalogException("invalid duration '" + text + "'");
-        }
-        long n = Long.parseLong(m.group(1));
-        Duration d = switch (m.group(2)) {
-            case "", "ms", "milli", "millis", "millisecond", "milliseconds" -> Duration.ofMillis(n);
-            case "s", "sec", "secs", "second", "seconds" -> Duration.ofSeconds(n);
-            case "min", "mins", "minute", "minutes" -> Duration.ofMinutes(n);
-            case "h", "hour", "hours" -> Duration.ofHours(n);
-            case "d", "day", "days" -> Duration.ofDays(n);
-            default -> throw new CatalogException("invalid duration unit in '" + text + "'");
-        };
-        return n == 0 ? -1 : d.toMillis();
-    }
-
     /** The Avro schemas to pre-register for a new table, keyed by subject suffix ("key", "value"). */
     static Map<String, String> avroSchemas(TableSpec spec) {
         Map<String, String> schemas = new LinkedHashMap<>();
-        if (TableSpec.AVRO.equals(spec.keyFormat()) && !spec.keyColumns().isEmpty()) {
-            schemas.put("key", avroSchema(row(stripPrefix(spec.keyColumns(), spec.keyFieldsPrefix()))));
+        if (!spec.keyColumns().isEmpty() && TableSpec.AVRO.equals(spec.keyFormat())) {
+            schemas.put("key", avroSchema(row(spec.keyColumns())));
+        } else if (!spec.keyColumns().isEmpty()) {
+            // Records the raw key's type for inference; Flink's raw format writes the bytes unframed.
+            schemas.put("key", isString(spec.keyColumns().getFirst().type().getLogicalType()) ? "\"string\"" : "\"bytes\"");
         }
         schemas.put("value", avroSchema(row(spec.valueColumns())));
         return schemas;
-    }
-
-    private static List<TableSpec.Column> stripPrefix(List<TableSpec.Column> columns, String prefix) {
-        return columns.stream().map(c -> new TableSpec.Column(c.name().substring(prefix.length()), c.type())).toList();
     }
 
     private static RowType row(List<TableSpec.Column> columns) {
@@ -290,8 +258,7 @@ final class TableTranslator {
         List<String> keyNames = spec.keyColumns().stream().map(TableSpec.Column::name).toList();
 
         Map<String, String> options = new LinkedHashMap<>();
-        boolean upsert = spec.changelogMode().equals(TableSpec.UPSERT);
-        if (upsert) {
+        if (spec.changelogMode().equals(TableSpec.UPSERT)) {
             if (keyNames.isEmpty()) {
                 throw new CatalogException("topic " + topic + " is compacted but has no key to upsert on");
             }
@@ -299,7 +266,7 @@ final class TableTranslator {
             schema.primaryKey(keyNames);
         } else {
             options.put("connector", "kafka");
-            options.put("scan.startup.mode", spec.startupMode());
+            options.put("scan.startup.mode", "earliest-offset");
             if (!keyNames.isEmpty()) {
                 options.put("key.fields", String.join(";", keyNames));
             }
@@ -313,7 +280,7 @@ final class TableTranslator {
             if (!flinkFormat.equals("raw")) {
                 options.put("key." + flinkFormat + ".url", registryUrl);
             }
-            options.put("value.fields-include", spec.valueIncludesKey() ? "ALL" : "EXCEPT_KEY");
+            options.put("value.fields-include", "EXCEPT_KEY");
             if (!spec.keyFieldsPrefix().isEmpty()) {
                 options.put("key.fields-prefix", spec.keyFieldsPrefix());
             }
@@ -335,9 +302,5 @@ final class TableTranslator {
             case TableSpec.RAW -> "raw";
             default -> throw new CatalogException("unsupported format " + format);
         };
-    }
-
-    static String describeKeys(TableSpec spec) {
-        return spec.keyColumns().stream().map(TableSpec.Column::name).collect(Collectors.joining(", "));
     }
 }

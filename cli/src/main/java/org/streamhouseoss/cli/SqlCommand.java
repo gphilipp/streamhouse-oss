@@ -7,7 +7,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -39,15 +38,7 @@ class SqlCommand extends BaseCommand {
     int run() {
         String sql = readInput();
         Session session = session();
-        JsonNode result;
-        try {
-            result = session.post(endpoints.server, "/v1/sql", Map.of("sql", sql));
-        } catch (CliException e) {
-            if (e.body() != null && e.body().has("line")) {
-                throw new CliException("syntax error at " + e.getMessage());
-            }
-            throw e;
-        }
+        JsonNode result = session.sql(sql);
         boolean ok = result.path("ok").asBoolean();
         for (JsonNode statement : result.path("results")) {
             String status = statement.path("status").asText();
@@ -72,7 +63,7 @@ class SqlCommand extends BaseCommand {
         Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
         String last = "";
         while (true) {
-            JsonNode resources = session.get(endpoints.server, "/v1/resources");
+            JsonNode resources = session.resources(null);
             List<JsonNode> pending = new ArrayList<>();
             List<JsonNode> failed = new ArrayList<>();
             for (JsonNode r : resources) {

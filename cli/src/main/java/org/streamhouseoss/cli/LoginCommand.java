@@ -6,6 +6,10 @@ import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import io.quarkus.oidc.client.OidcClient;
+import io.quarkus.oidc.client.OidcClientException;
+import io.quarkus.oidc.client.Tokens;
+import io.quarkus.oidc.client.runtime.OidcClientConfig;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -21,13 +25,18 @@ class LoginCommand extends BaseCommand {
     @Override
     int run() {
         Session session = session();
-        JsonNode tokens;
+        Tokens tokens;
         if (username != null) {
             if (password == null) {
                 throw new CliException("--password (or SHCTL_PASSWORD) is required with --username");
             }
-            tokens = session.tokenRequest(Map.of("grant_type", "password", "client_id", Session.CLIENT_ID,
-                    "username", username, "password", password, "scope", "openid"));
+            OidcClient client = session.client(OidcClientConfig.Grant.Type.PASSWORD,
+                    Map.of("username", username, "password", password));
+            try {
+                tokens = session.await(client.getTokens());
+            } catch (OidcClientException e) {
+                throw new CliException("login failed: " + e.getMessage());
+            }
         } else {
             tokens = deviceFlow(session);
         }
@@ -36,24 +45,26 @@ class LoginCommand extends BaseCommand {
         return 0;
     }
 
-    private static JsonNode deviceFlow(Session session) {
-        JsonNode device = session.deviceAuthorization();
+    /** RFC 8628: show the code, then poll the token endpoint until the user has approved. */
+    private static Tokens deviceFlow(Session session) {
+        JsonNode device = session.authorizeDevice();
         String url = device.path("verification_uri_complete").asText(device.path("verification_uri").asText());
         System.out.println("Open " + url);
         System.out.println("and confirm the code " + device.path("user_code").asText());
+        OidcClient client = session.client(OidcClientConfig.Grant.Type.DEVICE, Map.of());
+        Map<String, String> deviceCode = Map.of("device_code", device.path("device_code").asText());
         Duration interval = Duration.ofSeconds(device.path("interval").asLong(5));
         Instant deadline = Instant.now().plusSeconds(device.path("expires_in").asLong(600));
         while (Instant.now().isBefore(deadline)) {
             try {
                 Thread.sleep(interval);
-                return session.tokenRequest(Map.of("grant_type", "urn:ietf:params:oauth:grant-type:device_code",
-                        "client_id", Session.CLIENT_ID, "device_code", device.path("device_code").asText()));
-            } catch (CliException e) {
-                String error = e.body() == null ? "" : e.body().path("error").asText();
-                if (error.equals("slow_down")) {
+                return session.await(client.getTokens(deviceCode));
+            } catch (OidcClientException e) {
+                String error = String.valueOf(e.getMessage());
+                if (error.contains("slow_down")) {
                     interval = interval.plusSeconds(5);
-                } else if (!error.equals("authorization_pending")) {
-                    throw e;
+                } else if (!error.contains("authorization_pending")) {
+                    throw new CliException("login failed: " + error);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

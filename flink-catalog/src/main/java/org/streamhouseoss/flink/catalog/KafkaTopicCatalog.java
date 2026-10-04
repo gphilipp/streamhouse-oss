@@ -1,6 +1,5 @@
 package org.streamhouseoss.flink.catalog;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -47,8 +46,6 @@ import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
  */
 public class KafkaTopicCatalog extends AbstractCatalog {
 
-    static final String DEFINITIONS_TOPIC = "_streamhouse.flink-tables";
-
     private final String bootstrapServers;
     private final String registryUrl;
     private final Map<String, String> kafkaProperties;
@@ -57,7 +54,6 @@ public class KafkaTopicCatalog extends AbstractCatalog {
 
     private Admin admin;
     private SchemaRegistry registry;
-    private TableDefinitions definitions;
 
     public KafkaTopicCatalog(String name, String database, String bootstrapServers, String registryUrl,
             Map<String, String> kafkaProperties, int defaultPartitions, short replicationFactor) {
@@ -81,8 +77,6 @@ public class KafkaTopicCatalog extends AbstractCatalog {
         Thread.currentThread().setContextClassLoader(KafkaTopicCatalog.class.getClassLoader());
         try {
             admin = Admin.create(client);
-            createTopic(DEFINITIONS_TOPIC, 1, "compact", Optional.empty());
-            definitions = new TableDefinitions(DEFINITIONS_TOPIC, client);
         } finally {
             Thread.currentThread().setContextClassLoader(previous);
         }
@@ -91,9 +85,6 @@ public class KafkaTopicCatalog extends AbstractCatalog {
 
     @Override
     public void close() {
-        if (definitions != null) {
-            definitions.close();
-        }
         if (admin != null) {
             admin.close();
         }
@@ -139,7 +130,7 @@ public class KafkaTopicCatalog extends AbstractCatalog {
         requireDatabase(database);
         Set<String> subjects = registry.subjects();
         return topics().stream()
-                .filter(t -> subjects.contains(t + "-value") || definitions.get(t).isPresent())
+                .filter(t -> subjects.contains(t + "-value"))
                 .sorted()
                 .toList();
     }
@@ -153,7 +144,7 @@ public class KafkaTopicCatalog extends AbstractCatalog {
     @Override
     public boolean tableExists(ObjectPath path) {
         return databaseExists(path.getDatabaseName()) && topics().contains(path.getObjectName())
-                && (registry.latest(path.getObjectName() + "-value").isPresent() || definitions.get(path.getObjectName()).isPresent());
+                && registry.latest(path.getObjectName() + "-value").isPresent();
     }
 
     @Override
@@ -165,7 +156,7 @@ public class KafkaTopicCatalog extends AbstractCatalog {
         return TableTranslator.toCatalogTable(topic, spec(path), bootstrapServers, registryUrl, kafkaProperties);
     }
 
-    /** The table as currently defined by the topic, its schemas and any stored definition. */
+    /** The table as defined by the topic's schemas and cleanup policy. */
     TableSpec spec(ObjectPath path) throws TableNotExistException {
         String topic = path.getObjectName();
         Optional<String> value = registry.latest(topic + "-value");
@@ -173,21 +164,7 @@ public class KafkaTopicCatalog extends AbstractCatalog {
             throw new TableNotExistException(getName(), path,
                     new CatalogException("topic " + topic + " has no registered value schema (subject " + topic + "-value)"));
         }
-        boolean compacted = cleanupPolicy(topic).contains("compact");
-        Optional<TableDefinitions.Definition> stored = definitions.get(topic);
-        if (stored.isEmpty()) {
-            return TableTranslator.infer(registry.latest(topic + "-key"), value.get(), compacted);
-        }
-        TableDefinitions.Definition d = stored.get();
-        TableSpec inferred = TableTranslator.infer(Optional.empty(), value.get(), false);
-        List<String> keyNames = d.keyColumns().stream().map(TableSpec.Column::name).toList();
-        List<TableSpec.Column> valueColumns = d.valueIncludesKey()
-                ? inferred.valueColumns().stream()
-                        .map(c -> keyNames.contains(c.name()) ? d.keyColumns().get(keyNames.indexOf(c.name())) : c).toList()
-                : inferred.valueColumns();
-        String mode = compacted && !d.keyColumns().isEmpty() ? TableSpec.UPSERT : TableSpec.APPEND;
-        return new TableSpec(d.keyColumns(), valueColumns, d.keyFormat(), d.valueFormat(), d.keyFieldsPrefix(),
-                d.valueIncludesKey(), mode, d.startupMode());
+        return TableTranslator.infer(registry.latest(topic + "-key"), value.get(), cleanupPolicy(topic).contains("compact"));
     }
 
     @Override
@@ -205,12 +182,8 @@ public class KafkaTopicCatalog extends AbstractCatalog {
             throw new TableAlreadyExistException(getName(), path);
         }
         TableTranslator.Creation creation = TableTranslator.fromCreate(resolved, defaultPartitions);
-        TableSpec spec = creation.spec();
-        TableTranslator.TopicSettings settings = creation.topic();
-        createTopic(topic, settings.partitions(), settings.cleanupPolicy(), settings.retentionMs());
-        TableTranslator.avroSchemas(spec).forEach((side, schema) -> registry.register(topic + "-" + side, schema));
-        definitions.put(topic, new TableDefinitions.Definition(spec.keyColumns(), spec.keyFormat(), spec.keyFieldsPrefix(),
-                spec.valueIncludesKey(), spec.valueFormat(), spec.startupMode()));
+        createTopic(topic, creation.topic().partitions(), creation.topic().cleanupPolicy());
+        TableTranslator.avroSchemas(creation.spec()).forEach((side, schema) -> registry.register(topic + "-" + side, schema));
     }
 
     @Override
@@ -233,9 +206,6 @@ public class KafkaTopicCatalog extends AbstractCatalog {
         }
         registry.delete(topic + "-key");
         registry.delete(topic + "-value");
-        if (definitions.get(topic).isPresent()) {
-            definitions.remove(topic);
-        }
     }
 
     @Override
@@ -243,16 +213,10 @@ public class KafkaTopicCatalog extends AbstractCatalog {
         throw new CatalogException("Kafka topics cannot be renamed");
     }
 
+    /** Flink 2.x calls the {@link TableChange} overload below; this legacy variant is not used. */
     @Override
-    public void alterTable(ObjectPath path, CatalogBaseTable newTable, boolean ignoreIfNotExists) throws TableNotExistException {
-        CatalogBaseTable current = getTable(path);
-        Map<String, String> changed = new java.util.HashMap<>(newTable.getOptions());
-        current.getOptions().forEach((k, v) -> {
-            if (v.equals(changed.get(k))) {
-                changed.remove(k);
-            }
-        });
-        applyOptionChanges(path, changed);
+    public void alterTable(ObjectPath path, CatalogBaseTable newTable, boolean ignoreIfNotExists) {
+        throw new UnsupportedOperationException("use ALTER TABLE ... SET ('changelog.mode' = ...)");
     }
 
     @Override
@@ -332,12 +296,10 @@ public class KafkaTopicCatalog extends AbstractCatalog {
         }
     }
 
-    private void createTopic(String topic, int partitions, String cleanupPolicy, Optional<Long> retentionMs) {
-        Map<String, String> configs = new java.util.HashMap<>();
-        configs.put(TopicConfig.CLEANUP_POLICY_CONFIG, cleanupPolicy);
-        retentionMs.ifPresent(ms -> configs.put(TopicConfig.RETENTION_MS_CONFIG, String.valueOf(ms)));
+    private void createTopic(String topic, int partitions, String cleanupPolicy) {
         NewTopic newTopic = new NewTopic(topic, Optional.of(partitions),
-                replicationFactor > 0 ? Optional.of(replicationFactor) : Optional.empty()).configs(configs);
+                replicationFactor > 0 ? Optional.of(replicationFactor) : Optional.empty())
+                .configs(Map.of(TopicConfig.CLEANUP_POLICY_CONFIG, cleanupPolicy));
         try {
             admin.createTopics(List.of(newTopic)).all().get(30, TimeUnit.SECONDS);
         } catch (ExecutionException e) {
@@ -464,9 +426,5 @@ public class KafkaTopicCatalog extends AbstractCatalog {
     @Override
     public void alterPartitionColumnStatistics(ObjectPath path, CatalogPartitionSpec spec, CatalogColumnStatistics statistics,
             boolean ignoreIfNotExists) {
-    }
-
-    static Collection<String> supportedOptions() {
-        return TableTranslator.SUPPORTED_OPTIONS;
     }
 }

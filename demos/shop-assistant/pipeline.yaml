@@ -6,7 +6,7 @@
 #   use [a-z0-9-] only.
 # - iceberg: topics to expose as Iceberg tables
 # - context: topics to serve as real-time context to AI agents over MCP. Names are
-#   [a-zA-Z][a-zA-Z0-9_]* and the topics have raw (string) keys, as the strictest platform requires.
+#   [a-zA-Z][a-zA-Z0-9_]* and the topics have raw (string) keys in a column named `key`.
 
 source:
   name: shop
@@ -26,11 +26,11 @@ statements:
   - name: customer-360
     sql: |
       CREATE TABLE customer_360 (
-        PRIMARY KEY (customer_key) NOT ENFORCED
-      ) DISTRIBUTED BY HASH(customer_key) INTO 1 BUCKETS
+        PRIMARY KEY (`key`) NOT ENFORCED
+      ) DISTRIBUTED BY HASH(`key`) INTO 1 BUCKETS
       WITH ('changelog.mode' = 'upsert', 'key.format' = 'raw', 'kafka.cleanup-policy' = 'compact')
       AS SELECT
-        CAST(c.customer_id AS STRING) AS customer_key,
+        CAST(c.customer_id AS STRING) AS `key`,
         c.customer_id,
         c.first_name || ' ' || c.last_name AS name,
         c.email,
@@ -47,11 +47,11 @@ statements:
   - name: inventory-live
     sql: |
       CREATE TABLE inventory_live (
-        PRIMARY KEY (product_key) NOT ENFORCED
-      ) DISTRIBUTED BY HASH(product_key) INTO 1 BUCKETS
+        PRIMARY KEY (`key`) NOT ENFORCED
+      ) DISTRIBUTED BY HASH(`key`) INTO 1 BUCKETS
       WITH ('changelog.mode' = 'upsert', 'key.format' = 'raw', 'kafka.cleanup-policy' = 'compact')
       AS SELECT
-        CAST(p.product_id AS STRING) AS product_key,
+        CAST(p.product_id AS STRING) AS `key`,
         p.product_id,
         p.sku,
         p.name,

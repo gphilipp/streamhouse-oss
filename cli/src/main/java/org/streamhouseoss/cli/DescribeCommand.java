@@ -1,7 +1,5 @@
 package org.streamhouseoss.cli;
 
-import java.util.Map;
-
 import com.fasterxml.jackson.databind.JsonNode;
 
 import picocli.CommandLine.Command;
@@ -24,7 +22,7 @@ class DescribeCommand extends BaseCommand {
             case "iceberg", "iceberg_table" -> "ICEBERG";
             default -> kind.toUpperCase();
         };
-        JsonNode result = session().post(endpoints.server, "/v1/sql", Map.of("sql", "DESCRIBE " + sqlKind + " " + quote(name)));
+        JsonNode result = session().sql("DESCRIBE " + sqlKind + " " + quote(name));
         JsonNode statement = result.path("results").get(0);
         if (!statement.path("status").asText().equals("OK")) {
             throw new CliException(statement.path("message").asText());
@@ -49,7 +47,8 @@ class DescribeCommand extends BaseCommand {
         return 0;
     }
 
+    /** Plain names and dotted topic names as-is; anything else (e.g. statement names with dashes) back-quoted. */
     private static String quote(String name) {
-        return name.matches("[a-z_][a-z0-9_.]*") ? name : "\"" + name.replace("\"", "\"\"") + "\"";
+        return name.matches("[a-z_][a-z0-9_.]*") ? name : "`" + name.replace("`", "``") + "`";
     }
 }

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from dotenv import dotenv_values
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -18,18 +18,16 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Settings:
+    """Settings read from the environment, after loading config/<env>.env into it."""
     env: str
-    values: dict[str, str]
 
     def __getitem__(self, key: str) -> str:
-        value = self.values.get(key)
-        if value is None or value == "":
+        if not (value := os.environ.get(key)):
             raise ConfigError(f"{key} is not set in config/{self.env}.env")
         return value
 
     def get(self, key: str, default: str | None = None) -> str | None:
-        value = self.values.get(key)
-        return default if value in (None, "") else value
+        return os.environ.get(key) or default
 
     @property
     def platform(self) -> str:
@@ -41,10 +39,8 @@ def load_settings(env: str) -> Settings:
     if not path.exists():
         hint = f" (copy config/{env}.env.example)" if (ROOT / "config" / f"{env}.env.example").exists() else ""
         raise ConfigError(f"missing {path}{hint}")
-    values = {k: v for k, v in dotenv_values(path).items() if v is not None}
-    # Environment variables override the file.
-    values.update({k: v for k, v in os.environ.items() if k in values})
-    return Settings(env=env, values=values)
+    load_dotenv(path, override=False)  # variables already in the environment win
+    return Settings(env)
 
 
 @dataclass(frozen=True)

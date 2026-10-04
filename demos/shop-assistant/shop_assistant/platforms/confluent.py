@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import base64
-
-import httpx
+import httpx2
 
 from ..settings import ContextTopic, Pipeline, Statement
-from .base import IcebergAccess, McpEndpoint, Platform, PlatformError
+from .base import IcebergAccess, McpEndpoint, Platform, PlatformError, basic_auth, literal
 
 API = "https://api.confluent.cloud"
 
@@ -24,12 +22,12 @@ class ConfluentPlatform(Platform):
         self.region = s["CONFLUENT_REGION"]
         self.cloud = s.get("CONFLUENT_CLOUD", "AWS")
         auth = (s["CONFLUENT_GLOBAL_API_KEY"], s["CONFLUENT_GLOBAL_API_SECRET"])
-        self.api = httpx.Client(base_url=API, auth=auth, timeout=30)
-        self.flink = httpx.Client(
+        self.api = httpx2.Client(base_url=API, auth=auth, timeout=30)
+        self.flink = httpx2.Client(
             base_url=f"https://flink.{self.region}.{self.cloud.lower()}.confluent.cloud"
                      f"/sql/v1/organizations/{self.org}/environments/{self.env}",
             auth=auth, timeout=30)
-        self.registry = httpx.Client(
+        self.registry = httpx2.Client(
             base_url=s["CONFLUENT_SCHEMA_REGISTRY_URL"],
             auth=(s["CONFLUENT_SCHEMA_REGISTRY_API_KEY"], s["CONFLUENT_SCHEMA_REGISTRY_API_SECRET"]), timeout=30)
 
@@ -89,10 +87,6 @@ class ConfluentPlatform(Platform):
             return state == "RUNNING"
 
         self.poll(running, f"connector {name} to run")
-
-    def topics_ready(self, topics: list[str]) -> list[str]:
-        subjects = set(self._check(self.registry.get("/subjects"), "listing subjects").json())
-        return [t for t in topics if f"{t}-value" not in subjects]
 
     # ---- Flink ----------------------------------------------------------------------------
 
@@ -187,25 +181,23 @@ class ConfluentPlatform(Platform):
         s = self.settings
         uri = (f"https://tableflow.{self.region}.{self.cloud.lower()}.confluent.cloud"
                f"/iceberg/catalog/organizations/{self.org}/environments/{self.env}")
-        quote = lambda v: "'" + v.replace("'", "''") + "'"
         return IcebergAccess(
             # OAuth2 client credentials with the API key; storage credentials are vended by the catalog.
             setup=[f"""CREATE OR REPLACE SECRET lake_catalog (TYPE iceberg,
-                       CLIENT_ID {quote(s['CONFLUENT_GLOBAL_API_KEY'])}, CLIENT_SECRET {quote(s['CONFLUENT_GLOBAL_API_SECRET'])},
-                       OAUTH2_SERVER_URI {quote(uri + '/v1/oauth/tokens')}, OAUTH2_SCOPE 'catalog')"""],
-            attach=f"ATTACH {quote(s.get('CONFLUENT_ICEBERG_WAREHOUSE', ''))} AS lake "
-                   f"(TYPE iceberg, ENDPOINT {quote(uri)}, SECRET lake_catalog)",
+                       CLIENT_ID {literal(s['CONFLUENT_GLOBAL_API_KEY'])}, CLIENT_SECRET {literal(s['CONFLUENT_GLOBAL_API_SECRET'])},
+                       OAUTH2_SERVER_URI {literal(uri + '/v1/oauth/tokens')}, OAUTH2_SCOPE 'catalog')"""],
+            attach=f"ATTACH {literal(s.get('CONFLUENT_ICEBERG_WAREHOUSE', ''))} AS lake "
+                   f"(TYPE iceberg, ENDPOINT {literal(uri)}, SECRET lake_catalog)",
             namespace=self.cluster)
 
     def mcp(self) -> McpEndpoint:
         s = self.settings
         url = (f"https://mcp.{self.region}.{self.cloud.lower()}.confluent.cloud/mcp/v1/context-engine"
                f"/organizations/{self.org}/environments/{self.env}/kafka-clusters/{self.cluster}")
-        token = base64.b64encode(f"{s['CONFLUENT_GLOBAL_API_KEY']}:{s['CONFLUENT_GLOBAL_API_SECRET']}".encode()).decode()
-        return McpEndpoint(url, {"Authorization": f"Basic {token}"})
+        return McpEndpoint(url, basic_auth(s["CONFLUENT_GLOBAL_API_KEY"], s["CONFLUENT_GLOBAL_API_SECRET"]))
 
     @staticmethod
-    def _check(response: httpx.Response, what: str) -> httpx.Response:
+    def _check(response: httpx2.Response, what: str) -> httpx2.Response:
         if response.status_code >= 400:
             try:
                 errors = response.json().get("errors") or response.json()

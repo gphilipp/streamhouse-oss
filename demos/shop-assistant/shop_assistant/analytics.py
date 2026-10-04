@@ -36,16 +36,7 @@ def run(platform: Platform, log=print) -> dict[str, list[tuple]]:
     results = {}
     for title, sql in REPORTS.items():
         relation = db.sql(sql)
-        rows = relation.fetchall()
-        results[title] = rows
-        log(f"\n{title}")
-        log(_table(relation.columns, rows))
+        results[title] = relation.fetchall()
+        log(f"\n{title}\n{relation}")
     return results
 
-
-def _table(columns: list[str], rows: list[tuple]) -> str:
-    cells = [[str(c) for c in columns]] + [["NULL" if v is None else str(v) for v in row] for row in rows]
-    widths = [max(len(r[i]) for r in cells) for i in range(len(columns))]
-    lines = ["  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in cells]
-    lines.insert(1, "  ".join("-" * w for w in widths))
-    return "\n".join(lines) if rows else lines[0] + "\n(no rows)"

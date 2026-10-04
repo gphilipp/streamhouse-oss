@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import httpx2
+
 from ..settings import ContextTopic, Pipeline, Settings, Statement
 
 Log = Callable[[str], None]
+
+
+def literal(value: str) -> str:
+    """A SQL string literal."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def basic_auth(key: str, secret: str) -> dict[str, str]:
+    """HTTP Basic credentials for an API key and secret."""
+    return {"Authorization": "Basic " + base64.b64encode(f"{key}:{secret}".encode()).decode()}
 
 
 class PlatformError(Exception):
@@ -36,6 +49,8 @@ class Platform(ABC):
     interfaces: Flink SQL text, the Iceberg REST catalog and MCP."""
 
     name: str
+    #: The platform's Confluent-compatible schema registry; a topic is ready once it has a value schema.
+    registry: httpx2.Client
 
     def __init__(self, settings: Settings, log: Log = print):
         self.settings = settings
@@ -65,10 +80,6 @@ class Platform(ABC):
     def create_source(self, pipeline: Pipeline) -> None: ...
 
     @abstractmethod
-    def topics_ready(self, topics: list[str]) -> list[str]:
-        """Returns the topics that do not exist yet (or have no schema yet)."""
-
-    @abstractmethod
     def run_statement(self, statement: Statement) -> None:
         """Submits a Flink SQL statement (idempotent by name) and waits until it runs or completes."""
 
@@ -93,6 +104,14 @@ class Platform(ABC):
     def mcp(self) -> McpEndpoint: ...
 
     # ---- helpers --------------------------------------------------------------------------
+
+    def topics_ready(self, topics: list[str]) -> list[str]:
+        """Returns the topics that have no registered value schema yet."""
+        response = self.registry.get("/subjects")
+        if response.status_code >= 400:
+            raise PlatformError(f"listing schema subjects: HTTP {response.status_code} {response.text}")
+        subjects = set(response.json())
+        return [t for t in topics if f"{t}-value" not in subjects]
 
     def wait_for_topics(self, topics: list[str], timeout_s: float = 600) -> None:
         deadline = time.monotonic() + timeout_s

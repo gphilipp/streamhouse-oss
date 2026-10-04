@@ -94,43 +94,49 @@ class TableTranslatorTest {
     }
 
     @Test
-    void ctasWithRawStringKeyBecomesACompactedUpsertTopic() {
+    void ctasWithRawStringKeyRoundTripsThroughTheRegistry() {
         ResolvedCatalogTable created = resolved(
-                List.of(Column.physical("customer_key", DataTypes.STRING().notNull()), Column.physical("open_orders", DataTypes.BIGINT().notNull())),
-                List.of("customer_key"),
+                List.of(Column.physical("key", DataTypes.STRING().notNull()), Column.physical("open_orders", DataTypes.BIGINT().notNull())),
+                List.of("key"),
                 Map.of("changelog.mode", "upsert", "key.format", "raw"),
-                TableDistribution.ofHash(List.of("customer_key"), 1));
+                TableDistribution.ofHash(List.of("key"), 1));
 
         TableTranslator.Creation creation = TableTranslator.fromCreate(created, 6);
 
-        assertThat(creation.topic()).isEqualTo(new TableTranslator.TopicSettings(1, "compact", Optional.empty()));
+        assertThat(creation.topic()).isEqualTo(new TableTranslator.TopicSettings(1, "compact"));
         TableSpec spec = creation.spec();
-        assertThat(spec.keyColumns()).extracting(TableSpec.Column::name).containsExactly("customer_key");
+        assertThat(spec.keyColumns()).extracting(TableSpec.Column::name).containsExactly("key");
         assertThat(spec.valueColumns()).extracting(TableSpec.Column::name).containsExactly("open_orders");
-        assertThat(spec.valueIncludesKey()).isFalse();
-        assertThat(TableTranslator.avroSchemas(spec)).containsOnlyKeys("value");
-        assertThat(TableTranslator.avroSchemas(spec).get("value")).contains("\"open_orders\"").doesNotContain("customer_key");
+        Map<String, String> schemas = TableTranslator.avroSchemas(spec);
+        assertThat(schemas.get("key")).isEqualTo("\"string\"");
+        assertThat(schemas.get("value")).contains("\"open_orders\"").doesNotContain("\"key\"");
 
-        CatalogTable table = TableTranslator.toCatalogTable("open_orders_by_customer", spec, "k", "r", Map.of());
+        // A later session sees the same table, inferred from the registered schemas and the compacted topic.
+        TableSpec inferred = TableTranslator.infer(Optional.of(schemas.get("key")), schemas.get("value"), true);
+        assertThat(inferred.keyColumns()).containsExactly(new TableSpec.Column("key", DataTypes.STRING().notNull()));
+        assertThat(inferred.physicalColumns()).extracting(TableSpec.Column::name).containsExactly("key", "open_orders");
+        CatalogTable table = TableTranslator.toCatalogTable("open_orders_by_customer", inferred, "k", "r", Map.of());
         assertThat(table.getOptions()).containsEntry("connector", "upsert-kafka").containsEntry("key.format", "raw")
                 .containsEntry("value.fields-include", "EXCEPT_KEY");
+        assertThat(table.getUnresolvedSchema().getPrimaryKey()).get()
+                .extracting(Schema.UnresolvedPrimaryKey::getColumnNames).isEqualTo(List.of("key"));
     }
 
     @Test
     void createDefaultsMatchTopicsAsTablesSemantics() {
         ResolvedCatalogTable appendTable = resolved(List.of(Column.physical("s", DataTypes.STRING())), List.of(), Map.of(), null);
         TableTranslator.Creation append = TableTranslator.fromCreate(appendTable, 6);
-        assertThat(append.topic()).isEqualTo(new TableTranslator.TopicSettings(6, "delete", Optional.empty()));
+        assertThat(append.topic()).isEqualTo(new TableTranslator.TopicSettings(6, "delete"));
         assertThat(append.spec().changelogMode()).isEqualTo("append");
         assertThat(append.spec().keyColumns()).isEmpty();
 
         ResolvedCatalogTable pkTable = resolved(
                 List.of(Column.physical("id", DataTypes.INT().notNull()), Column.physical("s", DataTypes.STRING())),
-                List.of("id"), Map.of("kafka.retention.time", "7 d", "kafka.cleanup-policy", "delete-compact"), null);
+                List.of("id"), Map.of("kafka.cleanup-policy", "delete-compact"), null);
         TableTranslator.Creation upsert = TableTranslator.fromCreate(pkTable, 6);
         assertThat(upsert.spec().changelogMode()).isEqualTo("upsert");
         assertThat(upsert.spec().keyFormat()).isEqualTo("avro-registry");
-        assertThat(upsert.topic()).isEqualTo(new TableTranslator.TopicSettings(6, "compact,delete", Optional.of(604_800_000L)));
+        assertThat(upsert.topic()).isEqualTo(new TableTranslator.TopicSettings(6, "compact,delete"));
         assertThat(TableTranslator.avroSchemas(upsert.spec())).containsOnlyKeys("key", "value");
     }
 
@@ -142,26 +148,13 @@ class TableTranslatorTest {
         assertThatThrownBy(() -> TableTranslator.fromCreate(resolved(idAndName, List.of("id"), Map.of("changelog.mode", "retract"), null), 6))
                 .hasMessageContaining("retract");
         assertThatThrownBy(() -> TableTranslator.fromCreate(resolved(idAndName, List.of("id"), Map.of("key.format", "raw"), null), 6))
-                .hasMessageContaining("exactly one key column of type STRING or BYTES");
+                .hasMessageContaining("exactly one key column, named `key`, of type STRING or BYTES");
+        assertThatThrownBy(() -> TableTranslator.fromCreate(resolved(idAndName, List.of(), Map.of("kafka.retention.time", "7 d"), null), 6))
+                .hasMessageContaining("unsupported table option(s) [kafka.retention.time]");
         assertThatThrownBy(() -> TableTranslator.fromCreate(resolved(idAndName, List.of(), Map.of("error-handling.mode", "log"), null), 6))
                 .hasMessageContaining("unsupported table option(s) [error-handling.mode]");
         assertThatThrownBy(() -> TableTranslator.fromCreate(resolved(idAndName, List.of(), Map.of("connector", "datagen"), null), 6))
                 .hasMessageContaining("cannot be 'datagen'");
-    }
-
-    @Test
-    void durations() {
-        assertThat(TableTranslator.durationMillis("0")).isEqualTo(-1);
-        assertThat(TableTranslator.durationMillis("604800000 ms")).isEqualTo(604_800_000L);
-        assertThat(TableTranslator.durationMillis("12 h")).isEqualTo(43_200_000L);
-    }
-
-    @Test
-    void definitionsRoundTrip() {
-        TableDefinitions.Definition d = new TableDefinitions.Definition(
-                List.of(new TableSpec.Column("customer_key", DataTypes.STRING().notNull())), "raw", "", false, "avro-registry", null);
-
-        assertThat(TableDefinitions.decode(TableDefinitions.encode(d))).isEqualTo(d);
     }
 
     private static ResolvedCatalogTable resolved(List<Column> columns, List<String> primaryKey, Map<String, String> options,

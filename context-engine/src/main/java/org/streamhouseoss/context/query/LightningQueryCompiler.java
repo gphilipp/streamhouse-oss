@@ -56,7 +56,7 @@ public final class LightningQueryCompiler {
     public record Parsed(String table, SqlSelect select, SqlNodeList orderBy, SqlNode offset, SqlNode fetch, String alias) {
     }
 
-    public record Compiled(String table, String sql, List<String> parameters, int limit, boolean aggregate) {
+    public record Compiled(String table, String sql, List<String> parameters, int limit) {
     }
 
     private static final SqlParser.Config PARSER = SqlParser.config()
@@ -168,7 +168,7 @@ public final class LightningQueryCompiler {
                 }
                 sql.append(" OFFSET ").append(offset);
             }
-            return new Compiled(table.topic(), sql.toString(), List.copyOf(parameters), limit, aggregate);
+            return new Compiled(table.topic(), sql.toString(), List.copyOf(parameters), limit);
         }
 
         private boolean renderSelectList(StringBuilder sql) {
@@ -409,7 +409,8 @@ public final class LightningQueryCompiler {
         throw QueryException.invalid("expected a literal value, got " + node);
     }
 
-    private static Optional<String> resolve(String requested, Collection<String> candidates) {
+    /** Exact match first, then a unique case-insensitive match. */
+    static Optional<String> resolve(String requested, Collection<String> candidates) {
         if (candidates.contains(requested)) {
             return Optional.of(requested);
         }

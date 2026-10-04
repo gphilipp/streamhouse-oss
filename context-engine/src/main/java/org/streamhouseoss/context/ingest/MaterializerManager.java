@@ -11,10 +11,8 @@ import java.util.concurrent.TimeoutException;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.Config;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.config.TopicConfig;
-import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -23,7 +21,7 @@ import org.streamhouseoss.context.schema.AvroDecoder;
 import org.streamhouseoss.context.store.ServingStore;
 import org.streamhouseoss.context.store.TableInfo;
 import org.streamhouseoss.context.store.TableStatus;
-import org.streamhouseoss.model.TableMode;
+import org.streamhouseoss.context.store.TableMode;
 
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -67,7 +65,6 @@ public class MaterializerManager {
 
     void onStart(@Observes StartupEvent event) {
         admin = Admin.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers));
-        createAuditTopic();
         for (TableInfo table : store.tables()) {
             if (table.status() != TableStatus.FAILED) {
                 start(table);
@@ -79,27 +76,6 @@ public class MaterializerManager {
         running.keySet().forEach(this::stop);
         if (admin != null) {
             admin.close(Duration.ofSeconds(5));
-        }
-    }
-
-    /** The audit topic must exist because brokers run with topic auto-creation disabled. */
-    private void createAuditTopic() {
-        if (config.auditTopic().isBlank()) {
-            return;
-        }
-        NewTopic topic = new NewTopic(config.auditTopic(), Optional.empty(), Optional.empty())
-                .configs(Map.of(TopicConfig.RETENTION_MS_CONFIG, String.valueOf(Duration.ofDays(30).toMillis())));
-        try {
-            admin.createTopics(java.util.List.of(topic)).all().get(10, TimeUnit.SECONDS);
-            LOG.infof("Created audit topic %s", config.auditTopic());
-        } catch (ExecutionException e) {
-            if (!(e.getCause() instanceof TopicExistsException)) {
-                LOG.warnf("Cannot create audit topic %s: %s", config.auditTopic(), e.getCause().getMessage());
-            }
-        } catch (TimeoutException e) {
-            LOG.warnf("Timed out creating audit topic %s", config.auditTopic());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 

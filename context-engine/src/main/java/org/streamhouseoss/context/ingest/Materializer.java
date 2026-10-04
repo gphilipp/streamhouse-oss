@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,7 +35,7 @@ import org.streamhouseoss.context.schema.SchemaException;
 import org.streamhouseoss.context.store.ServingStore;
 import org.streamhouseoss.context.store.TableInfo;
 import org.streamhouseoss.context.store.TableStatus;
-import org.streamhouseoss.model.TableMode;
+import org.streamhouseoss.context.store.TableMode;
 
 /**
  * Materializes one topic into its serving table. Each poll's records are written in a single
@@ -240,11 +241,7 @@ final class Materializer implements Runnable {
                 id -> Layout.of(mode, key == null ? null : key.schema(), value.schema()));
         layout = layout.merge(recordLayout);
 
-        Map<String, Object> values = new HashMap<>();
-        GenericRecord row = (GenericRecord) value.value();
-        for (Schema.Field field : row.getSchema().getFields()) {
-            values.put(field.name(), AvroColumns.toJdbc(field.schema(), row.get(field.pos())));
-        }
+        Map<String, Object> values = fieldValues((GenericRecord) value.value());
         List<Object> keyValues = List.of();
         if (key != null) {
             keyValues = keyValues(key);
@@ -269,14 +266,17 @@ final class Materializer implements Runnable {
 
     private static List<Object> keyValues(AvroDecoder.Decoded key) {
         if (key.value() instanceof GenericRecord record) {
-            List<Object> values = new ArrayList<>();
-            for (Schema.Field field : record.getSchema().getFields()) {
-                values.add(AvroColumns.toJdbc(field.schema(), record.get(field.pos())));
-            }
-            return values;
+            return new ArrayList<>(fieldValues(record).values());
         }
-        List<Object> values = new ArrayList<>();
-        values.add(AvroColumns.toJdbc(key.schema(), key.value()));
+        return Arrays.asList(AvroColumns.toJdbc(key.schema(), key.value()));
+    }
+
+    /** JDBC values of a record's fields, by field name, in field order. */
+    private static Map<String, Object> fieldValues(GenericRecord record) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        for (Schema.Field field : record.getSchema().getFields()) {
+            values.put(field.name(), AvroColumns.toJdbc(field.schema(), record.get(field.pos())));
+        }
         return values;
     }
 

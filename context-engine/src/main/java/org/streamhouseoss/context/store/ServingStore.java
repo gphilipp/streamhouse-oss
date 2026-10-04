@@ -18,7 +18,6 @@ import java.util.stream.Collectors;
 import javax.sql.DataSource;
 
 import org.streamhouseoss.context.schema.Column;
-import org.streamhouseoss.model.TableMode;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -66,12 +65,11 @@ public class ServingStore {
     // ---- table definitions ------------------------------------------------------------------
 
     public List<TableInfo> tables() {
-        return query("SELECT * FROM serving._tables ORDER BY topic", ps -> {
-        });
+        return query("SELECT * FROM serving._tables ORDER BY topic");
     }
 
     public Optional<TableInfo> table(String topic) {
-        return query("SELECT * FROM serving._tables WHERE topic = ?", ps -> ps.setString(1, topic)).stream().findFirst();
+        return query("SELECT * FROM serving._tables WHERE topic = ?", topic).stream().findFirst();
     }
 
     /**
@@ -261,13 +259,11 @@ public class ServingStore {
         }
     }
 
-    private interface Binder {
-        void bind(PreparedStatement ps) throws SQLException;
-    }
-
-    private List<TableInfo> query(String sql, Binder binder) {
+    private List<TableInfo> query(String sql, Object... params) {
         try (Connection c = connection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            binder.bind(ps);
+            for (int i = 0; i < params.length; i++) {
+                ps.setObject(i + 1, params[i]);
+            }
             List<TableInfo> result = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {

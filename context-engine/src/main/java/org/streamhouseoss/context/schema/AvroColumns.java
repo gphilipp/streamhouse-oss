@@ -19,12 +19,13 @@ import org.apache.avro.generic.GenericFixed;
 
 /**
  * Maps Avro schemas to Postgres columns and Avro values to JDBC values. Understands Avro logical
- * types plus the Kafka Connect / Debezium semantic types that the Avro converter leaves in
- * {@code connect.name}.
+ * types, which is what Debezium emits with {@code time.precision.mode=connect}, plus Debezium's
+ * string-encoded {@code ZonedTimestamp}.
  */
 public final class AvroColumns {
 
     private static final Conversions.DecimalConversion DECIMALS = new Conversions.DecimalConversion();
+    private static final String ZONED_TIMESTAMP = "io.debezium.time.ZonedTimestamp";
 
     private AvroColumns() {
     }
@@ -58,40 +59,26 @@ public final class AvroColumns {
     public static ColumnType typeOf(Schema schema) {
         Schema s = unwrapOptional(schema);
         LogicalType logical = s.getLogicalType();
-        String connectName = s.getProp("connect.name");
         return switch (s.getType()) {
             case BOOLEAN -> ColumnType.BOOLEAN;
-            case INT -> {
-                if (logical instanceof LogicalTypes.Date || "io.debezium.time.Date".equals(connectName)
-                        || "org.apache.kafka.connect.data.Date".equals(connectName)) {
-                    yield ColumnType.DATE;
-                }
-                if (logical instanceof LogicalTypes.TimeMillis || "io.debezium.time.Time".equals(connectName)) {
-                    yield ColumnType.TIME;
-                }
-                yield ColumnType.INTEGER;
-            }
+            case INT -> logical instanceof LogicalTypes.Date ? ColumnType.DATE
+                    : logical instanceof LogicalTypes.TimeMillis ? ColumnType.TIME
+                    : ColumnType.INTEGER;
             case LONG -> {
                 if (logical instanceof LogicalTypes.TimestampMillis || logical instanceof LogicalTypes.TimestampMicros
-                        || logical instanceof LogicalTypes.TimestampNanos
-                        || "org.apache.kafka.connect.data.Timestamp".equals(connectName)) {
+                        || logical instanceof LogicalTypes.TimestampNanos) {
                     yield ColumnType.TIMESTAMPTZ;
                 }
                 if (logical instanceof LogicalTypes.LocalTimestampMillis || logical instanceof LogicalTypes.LocalTimestampMicros
-                        || logical instanceof LogicalTypes.LocalTimestampNanos
-                        || "io.debezium.time.Timestamp".equals(connectName)
-                        || "io.debezium.time.MicroTimestamp".equals(connectName)
-                        || "io.debezium.time.NanoTimestamp".equals(connectName)) {
+                        || logical instanceof LogicalTypes.LocalTimestampNanos) {
                     yield ColumnType.TIMESTAMP;
                 }
-                if (logical instanceof LogicalTypes.TimeMicros || "io.debezium.time.MicroTime".equals(connectName)) {
-                    yield ColumnType.TIME;
-                }
-                yield ColumnType.BIGINT;
+                yield logical instanceof LogicalTypes.TimeMicros ? ColumnType.TIME : ColumnType.BIGINT;
             }
             case FLOAT -> ColumnType.REAL;
             case DOUBLE -> ColumnType.DOUBLE;
-            case STRING -> "io.debezium.time.ZonedTimestamp".equals(connectName) ? ColumnType.TIMESTAMPTZ : ColumnType.TEXT;
+            // Debezium renders timestamptz as an ISO-8601 string even with time.precision.mode=connect.
+            case STRING -> ZONED_TIMESTAMP.equals(s.getProp("connect.name")) ? ColumnType.TIMESTAMPTZ : ColumnType.TEXT;
             case ENUM -> ColumnType.TEXT;
             case BYTES, FIXED -> logical instanceof LogicalTypes.Decimal ? ColumnType.NUMERIC : ColumnType.BYTES;
             case RECORD, ARRAY, MAP, UNION -> ColumnType.JSON;
@@ -105,9 +92,7 @@ public final class AvroColumns {
             return null;
         }
         Schema s = unwrapOptional(schema);
-        ColumnType type = typeOf(s);
-        String connectName = s.getProp("connect.name");
-        return switch (type) {
+        return switch (typeOf(s)) {
             case BOOLEAN, INTEGER, BIGINT, REAL, DOUBLE -> value;
             case TEXT -> value.toString();
             case BYTES -> bytes(value);
@@ -116,24 +101,19 @@ public final class AvroColumns {
             case TIME -> s.getType() == Schema.Type.INT
                     ? LocalTime.ofNanoOfDay(((Number) value).longValue() * 1_000_000L)
                     : LocalTime.ofNanoOfDay(((Number) value).longValue() * 1_000L);
-            case TIMESTAMPTZ -> {
-                if (s.getType() == Schema.Type.STRING) {
-                    yield OffsetDateTime.parse(value.toString());
-                }
-                yield OffsetDateTime.ofInstant(instant(s.getLogicalType(), connectName, ((Number) value).longValue()), ZoneOffset.UTC);
-            }
-            case TIMESTAMP -> LocalDateTime.ofInstant(instant(s.getLogicalType(), connectName, ((Number) value).longValue()), ZoneOffset.UTC);
+            case TIMESTAMPTZ -> s.getType() == Schema.Type.STRING
+                    ? OffsetDateTime.parse(value.toString())
+                    : OffsetDateTime.ofInstant(instant(s.getLogicalType(), ((Number) value).longValue()), ZoneOffset.UTC);
+            case TIMESTAMP -> LocalDateTime.ofInstant(instant(s.getLogicalType(), ((Number) value).longValue()), ZoneOffset.UTC);
             case JSON -> GenericData.get().toString(value);
         };
     }
 
-    private static Instant instant(LogicalType logical, String connectName, long v) {
-        if (logical instanceof LogicalTypes.TimestampMicros || logical instanceof LogicalTypes.LocalTimestampMicros
-                || "io.debezium.time.MicroTimestamp".equals(connectName)) {
+    private static Instant instant(LogicalType logical, long v) {
+        if (logical instanceof LogicalTypes.TimestampMicros || logical instanceof LogicalTypes.LocalTimestampMicros) {
             return Instant.ofEpochSecond(Math.floorDiv(v, 1_000_000L), Math.floorMod(v, 1_000_000L) * 1_000L);
         }
-        if (logical instanceof LogicalTypes.TimestampNanos || logical instanceof LogicalTypes.LocalTimestampNanos
-                || "io.debezium.time.NanoTimestamp".equals(connectName)) {
+        if (logical instanceof LogicalTypes.TimestampNanos || logical instanceof LogicalTypes.LocalTimestampNanos) {
             return Instant.ofEpochSecond(Math.floorDiv(v, 1_000_000_000L), Math.floorMod(v, 1_000_000_000L));
         }
         return Instant.ofEpochMilli(v);

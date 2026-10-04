@@ -17,8 +17,7 @@ class GetCommand extends BaseCommand {
 
     @Override
     int run() {
-        String query = kind == null ? "" : "?kind=" + kind.replace('-', '_').replace(' ', '_');
-        JsonNode resources = session().get(endpoints.server, "/v1/resources" + query);
+        JsonNode resources = session().resources(kind == null ? null : kind.replace('-', '_').replace(' ', '_'));
         List<List<String>> rows = new ArrayList<>();
         for (JsonNode r : resources) {
             rows.add(List.of(r.path("kind").asText().toLowerCase(), r.path("name").asText(), r.path("phase").asText(),

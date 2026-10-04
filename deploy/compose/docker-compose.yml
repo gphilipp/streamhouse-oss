@@ -72,7 +72,6 @@ services:
       APICURIO_REST_DELETION_ARTIFACT_ENABLED: "true"
       APICURIO_REST_DELETION_ARTIFACT-VERSION_ENABLED: "true"
       APICURIO_REST_DELETION_GROUP_ENABLED: "true"
-      QUARKUS_HTTP_CORS_ORIGINS: "*"
     depends_on:
       platform-db:
         condition: service_healthy
@@ -96,7 +95,7 @@ services:
       POSTGRES_PASSWORD: shop
     volumes:
       - shop-db-data:/var/lib/postgresql/data
-      - ../../examples/ecommerce/shop-schema.sql:/docker-entrypoint-initdb.d/01-shop-schema.sql:ro
+      - ../../demos/shop-assistant/sql/shop-schema.sql:/docker-entrypoint-initdb.d/01-shop-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
       interval: 5s
@@ -165,8 +164,9 @@ services:
   # ---------------------------------------------------------------- transform
   jobmanager:
     build:
-      context: ../..
-      dockerfile: deploy/compose/flink/Dockerfile
+      context: ./flink
+      additional_contexts:
+        catalog: ../../flink-catalog/target
     image: streamhouse/flink:2.1.3
     hostname: jobmanager
     command: jobmanager
@@ -193,12 +193,6 @@ services:
     depends_on:
       jobmanager:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://jobmanager:8081/taskmanagers | grep -q '\"id\"'"]
-      interval: 10s
-      timeout: 5s
-      retries: 18
-      start_period: 15s
 
   sql-gateway:
     image: streamhouse/flink:2.1.3
@@ -207,7 +201,6 @@ services:
       - /opt/flink/bin/sql-gateway.sh
       - start-foreground
       - -Dsql-gateway.endpoint.rest.address=0.0.0.0
-      - -Dsql-gateway.endpoint.rest.bind-address=0.0.0.0
       - -Dsql-gateway.endpoint.rest.port=8083
       - -Dsql-gateway.session.idle-timeout=30min
     ports:
@@ -293,8 +286,10 @@ services:
   context-engine:
     profiles: ["apps"]
     build:
-      context: ../../context-engine
-      dockerfile: src/main/docker/Dockerfile.jvm
+      context: ../../context-engine/target/quarkus-app
+      dockerfile: ../../../deploy/compose/quarkus.Dockerfile
+      args:
+        PORT: 8082
     image: streamhouse/context-engine:dev
     hostname: context-engine
     ports:
@@ -322,8 +317,10 @@ services:
   control-plane:
     profiles: ["apps"]
     build:
-      context: ../../control-plane
-      dockerfile: src/main/docker/Dockerfile.jvm
+      context: ../../control-plane/target/quarkus-app
+      dockerfile: ../../../deploy/compose/quarkus.Dockerfile
+      args:
+        PORT: 8080
     image: streamhouse/control-plane:dev
     hostname: control-plane
     ports:

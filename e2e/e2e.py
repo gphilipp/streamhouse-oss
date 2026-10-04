@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """End-to-end check of the local streamhouse (python3 standard library only).
 
-Assumes the stack is running (make up). Applies the e-commerce pipeline and checks that:
+Assumes the stack is running (make build up). Applies the e-commerce pipeline with bin/shctl and
+checks that:
   1. every resource becomes READY;
   2. an order inserted in the shop database is visible in the context engine within seconds;
   3. the change lands in the Iceberg table materialized from the topic;
@@ -19,7 +20,8 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONTROL_PLANE = os.environ.get("SHCTL_SERVER", "http://localhost:8080")
+PIPELINE = os.path.join(ROOT, "demos/shop-assistant/sql/pipeline.sql")
+SHCTL = os.path.join(ROOT, "bin/shctl")
 CONTEXT_ENGINE = os.environ.get("SHCTL_CONTEXT_ENGINE", "http://localhost:8082")
 ISSUER = os.environ.get("SHCTL_ISSUER", "http://localhost:8180/realms/streamhouse")
 FLINK_GATEWAY = os.environ.get("FLINK_GATEWAY", "http://localhost:8084")
@@ -62,6 +64,13 @@ def admin_token():
 
 def agent_token(client):
     return token(grant_type="client_credentials", client_id=client, client_secret=client + "-secret")
+
+
+def shctl(*args):
+    """Runs the CLI as admin; returns (exit code, stdout + stderr)."""
+    env = dict(os.environ, SHCTL_TOKEN=admin_token())
+    out = subprocess.run([SHCTL, *args], env=env, capture_output=True, text=True)
+    return out.returncode, out.stdout + out.stderr
 
 
 def lightning(agent, sql):
@@ -139,20 +148,8 @@ class Mcp:
 
 def main():
     # 1. Apply the pipeline and wait until it is running.
-    with open(os.path.join(ROOT, "examples/ecommerce/pipeline.sql")) as f:
-        status, _, raw = http("POST", CONTROL_PLANE + "/v1/sql", {"sql": f.read()}, admin_token())
-    result = json.loads(raw)
-    check("pipeline.sql is accepted", status == 200 and result.get("ok"), raw[:300] if not result.get("ok") else "")
-
-    deadline = time.time() + 300
-    while True:
-        _, _, raw = http("GET", CONTROL_PLANE + "/v1/resources", token=admin_token())
-        resources = json.loads(raw)
-        if all(r["phase"] == "READY" and r["settled"] for r in resources) or time.time() > deadline:
-            break
-        time.sleep(3)
-    not_ready = [f"{r['kind']} {r['name']}: {r['phase']} {r['message']}" for r in resources if r["phase"] != "READY"]
-    check(f"all {len(resources)} resources READY", not not_ready, "; ".join(not_ready))
+    code, output = shctl("sql", "-f", PIPELINE, "--wait", "--timeout", "300")
+    check("pipeline.sql applied and every resource READY", code == 0, "" if code == 0 else output[-1500:])
 
     # 2. Freshness: insert an order and wait for customer_360 to reflect it.
     agent = agent_token("support-agent")
@@ -172,13 +169,10 @@ def main():
           f"{latency:.2f}s" if latency is not None else "not visible after 60s")
 
     # 3. Iceberg: the same change lands in the lake (committed on Flink checkpoints).
-    catalog = ("CREATE CATALOG IF NOT EXISTS lake WITH ('type'='iceberg','catalog-type'='rest','uri'='http://gravitino:9001/iceberg/',"
-               "'io-impl'='org.apache.iceberg.aws.s3.S3FileIO','s3.endpoint'='http://s3:8333','s3.path-style-access'='true',"
-               "'s3.access-key-id'='streamhouse','s3.secret-access-key'='streamhouse-secret','client.region'='us-east-1')")
     iceberg_orders = None
     started = time.time()
     while time.time() - started < 90:
-        rows = flink_batch([catalog, "SET 'execution.runtime-mode' = 'batch'",
+        rows = flink_batch(["SET 'execution.runtime-mode' = 'batch'",
                             "SELECT orders FROM lake.streamhouse.customer_360 WHERE customer_id = 7"])
         iceberg_orders = rows[0][0] if rows else None
         if iceberg_orders == orders_before + 1:
@@ -188,10 +182,10 @@ def main():
           f"orders={iceberg_orders}, expected {orders_before + 1}, after {time.time() - started:.0f}s")
 
     # 4. Lineage from the source database to the context table.
-    _, _, raw = http("POST", CONTROL_PLANE + "/v1/sql", {"sql": "DESCRIBE CONTEXT customer_360"}, admin_token())
-    props = {row[0]: row[1] for row in json.loads(raw)["results"][0]["rows"]}
+    _, described = shctl("describe", "context", "customer_360")
+    upstream = described.split("upstream:", 1)[-1].split("downstream:", 1)[0]
     check("lineage: postgres://shop_pg/public.orders is upstream of context://customer_360",
-          "postgres://shop_pg/public.orders -> kafka://shop.public.orders" in props.get("upstream", ""), props.get("upstream", ""))
+          "postgres://shop_pg/public.orders -> kafka://shop.public.orders" in upstream, upstream.strip())
 
     # 5. Agents over MCP: granted tables only.
     mcp = Mcp(agent)

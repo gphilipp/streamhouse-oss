@@ -23,7 +23,7 @@ public class KafkaTopicCatalogFactory implements CatalogFactory {
             .withDescription("Kafka bootstrap servers");
     static final ConfigOption<String> SCHEMA_REGISTRY_URL = ConfigOptions.key("schema-registry.url").stringType().noDefaultValue()
             .withDescription("Confluent-compatible schema registry API");
-    static final ConfigOption<String> DEFAULT_DATABASE = ConfigOptions.key(CommonCatalogOptionsKeys.DEFAULT_DATABASE).stringType()
+    static final ConfigOption<String> DEFAULT_DATABASE = ConfigOptions.key("default-database").stringType()
             .defaultValue("local").withDescription("Name of the single database, i.e. the Kafka cluster");
     static final ConfigOption<Integer> DEFAULT_PARTITIONS = ConfigOptions.key("default.partitions").intType().defaultValue(6)
             .withDescription("Partitions of topics created without DISTRIBUTED BY ... INTO n BUCKETS");
@@ -60,11 +60,4 @@ public class KafkaTopicCatalogFactory implements CatalogFactory {
                 helper.getOptions().get(DEFAULT_PARTITIONS), helper.getOptions().get(REPLICATION_FACTOR).shortValue());
     }
 
-    /** Key of Flink's common catalog option, kept literal to avoid depending on its holder class. */
-    static final class CommonCatalogOptionsKeys {
-        static final String DEFAULT_DATABASE = "default-database";
-
-        private CommonCatalogOptionsKeys() {
-        }
-    }
 }

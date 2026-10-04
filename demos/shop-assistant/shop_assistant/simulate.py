@@ -10,7 +10,7 @@ import psycopg
 
 from .settings import ROOT, Settings
 
-SCHEMA = ROOT.parent.parent / "examples" / "ecommerce" / "shop-schema.sql"
+SCHEMA = ROOT / "sql" / "shop-schema.sql"
 CDC_SECTION = "-- CDC access for Debezium"
 
 

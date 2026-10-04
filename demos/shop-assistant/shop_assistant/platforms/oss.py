@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import base64
-
-import httpx
+import httpx2
 
 from ..settings import ContextTopic, Pipeline, Statement
-from .base import IcebergAccess, McpEndpoint, Platform, PlatformError
-
-
-def _literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
+from .base import IcebergAccess, McpEndpoint, Platform, PlatformError, basic_auth, literal
 
 
 def _ident(value: str) -> str:
-    return '"' + value.replace('"', '""') + '"'
+    """A back-quoted streamhouse SQL identifier (statement names contain dashes)."""
+    return "`" + value.replace("`", "``") + "`"
 
 
 class OssPlatform(Platform):
@@ -24,8 +19,8 @@ class OssPlatform(Platform):
     def __init__(self, settings, log=print):
         super().__init__(settings, log)
         s = settings
-        self.control_plane = httpx.Client(base_url=s["OSS_CONTROL_PLANE_URL"], timeout=60)
-        self.registry = httpx.Client(base_url=s["OSS_SCHEMA_REGISTRY_URL"], timeout=30)
+        self.control_plane = httpx2.Client(base_url=s["OSS_CONTROL_PLANE_URL"], timeout=60)
+        self.registry = httpx2.Client(base_url=s["OSS_SCHEMA_REGISTRY_URL"], timeout=30)
         self._token: str | None = None
 
     # ---- control plane access -------------------------------------------------------------
@@ -33,7 +28,7 @@ class OssPlatform(Platform):
     def _bearer(self) -> dict[str, str]:
         if self._token is None:
             s = self.settings
-            response = httpx.post(f"{s['OSS_OIDC_ISSUER']}/protocol/openid-connect/token", data={
+            response = httpx2.post(f"{s['OSS_OIDC_ISSUER']}/protocol/openid-connect/token", data={
                 "grant_type": "password", "client_id": "shctl",
                 "username": s["OSS_ADMIN_USER"], "password": s["OSS_ADMIN_PASSWORD"]}, timeout=30)
             if response.status_code != 200:
@@ -74,21 +69,15 @@ class OssPlatform(Platform):
         tables = ", ".join(pipeline.tables)
         self.sql(f"""
             CREATE CONNECTION {connection} TYPE POSTGRES WITH (
-              host = {_literal(s['OSS_SOURCE_PG_HOST'])},
-              port = {_literal(s.get('OSS_SOURCE_PG_PORT', '5432'))},
-              database = {_literal(s['SOURCE_PG_DATABASE'])},
-              user = {_literal(s['SOURCE_PG_CDC_USER'])},
-              password = SECRET {_literal(s['OSS_SOURCE_PASSWORD_SECRET'])},
-              publication = {_literal(s.get('OSS_SOURCE_PUBLICATION', 'streamhouse'))}
+              host = {literal(s['OSS_SOURCE_PG_HOST'])},
+              port = {literal(s.get('OSS_SOURCE_PG_PORT', '5432'))},
+              database = {literal(s['SOURCE_PG_DATABASE'])},
+              user = {literal(s['SOURCE_PG_CDC_USER'])},
+              password = SECRET {literal(s['OSS_SOURCE_PASSWORD_SECRET'])},
+              publication = {literal(s.get('OSS_SOURCE_PUBLICATION', 'streamhouse'))}
             );
             CREATE SOURCE {pipeline.source_name} FROM CONNECTION {connection} TABLES ({tables});""")
         self._await("SOURCE", pipeline.source_name)
-
-    def topics_ready(self, topics: list[str]) -> list[str]:
-        response = self.registry.get("/subjects")
-        response.raise_for_status()
-        subjects = set(response.json())
-        return [t for t in topics if f"{t}-value" not in subjects]
 
     def run_statement(self, statement: Statement) -> None:
         self.sql(f"CREATE STATEMENT {_ident(statement.name)} AS {statement.sql}")
@@ -99,7 +88,7 @@ class OssPlatform(Platform):
 
     def enable_context(self, ctx: ContextTopic) -> None:
         role = self.settings["OSS_AGENT_ROLE"]
-        self.sql(f"ALTER TOPIC {ctx.topic} ENABLE CONTEXT WITH (description = {_literal(ctx.description)});\n"
+        self.sql(f"ALTER TOPIC {ctx.topic} ENABLE CONTEXT WITH (description = {literal(ctx.description)});\n"
                  f"GRANT SELECT ON CONTEXT {ctx.topic} TO ROLE {role};")
 
     def wait_until_ready(self, pipeline: Pipeline) -> None:
@@ -131,16 +120,15 @@ class OssPlatform(Platform):
         s = self.settings
         endpoint = s["OSS_S3_ENDPOINT"].removeprefix("http://").removeprefix("https://")
         return IcebergAccess(
-            setup=[f"""CREATE OR REPLACE SECRET lake_storage (TYPE s3, KEY_ID {_literal(s['OSS_S3_ACCESS_KEY'])},
-                       SECRET {_literal(s['OSS_S3_SECRET_KEY'])}, REGION {_literal(s.get('OSS_S3_REGION', 'us-east-1'))},
-                       ENDPOINT {_literal(endpoint)}, URL_STYLE 'path',
+            setup=[f"""CREATE OR REPLACE SECRET lake_storage (TYPE s3, KEY_ID {literal(s['OSS_S3_ACCESS_KEY'])},
+                       SECRET {literal(s['OSS_S3_SECRET_KEY'])}, REGION {literal(s.get('OSS_S3_REGION', 'us-east-1'))},
+                       ENDPOINT {literal(endpoint)}, URL_STYLE 'path',
                        USE_SSL {str(s['OSS_S3_ENDPOINT'].startswith('https')).lower()})"""],
             # The local catalog needs no authentication and does not vend storage credentials.
-            attach=f"ATTACH '' AS lake (TYPE iceberg, ENDPOINT {_literal(s['OSS_ICEBERG_REST_URL'])}, "
+            attach=f"ATTACH '' AS lake (TYPE iceberg, ENDPOINT {literal(s['OSS_ICEBERG_REST_URL'])}, "
                    "AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none')",
             namespace=s["OSS_ICEBERG_NAMESPACE"])
 
     def mcp(self) -> McpEndpoint:
         s = self.settings
-        token = base64.b64encode(f"{s['OSS_AGENT_API_KEY']}:{s['OSS_AGENT_API_SECRET']}".encode()).decode()
-        return McpEndpoint(s["OSS_MCP_URL"], {"Authorization": f"Basic {token}"})
+        return McpEndpoint(s["OSS_MCP_URL"], basic_auth(s["OSS_AGENT_API_KEY"], s["OSS_AGENT_API_SECRET"]))

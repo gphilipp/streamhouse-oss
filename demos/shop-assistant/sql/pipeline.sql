@@ -1,7 +1,7 @@
 -- E-commerce streamhouse: shop database -> live customer 360 and inventory, as Iceberg tables
 -- for analytics and as real-time context for support agents.
 --
---   shctl sql -f examples/ecommerce/pipeline.sql --wait
+--   bin/shctl sql -f demos/shop-assistant/sql/pipeline.sql --wait
 
 -- Capture ------------------------------------------------------------------------------------
 

@@ -2,68 +2,83 @@ package org.streamhouseoss.cli;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.quarkus.oidc.client.OidcClient;
+import io.quarkus.oidc.client.OidcClientConfigBuilder;
+import io.quarkus.oidc.client.OidcClients;
+import io.quarkus.oidc.client.Tokens;
+import io.quarkus.oidc.client.runtime.OidcClientConfig;
+import io.quarkus.rest.client.reactive.QuarkusRestClientBuilder;
+import jakarta.ws.rs.ProcessingException;
+import jakarta.ws.rs.WebApplicationException;
+
 /**
- * Tokens and HTTP calls. Tokens are kept in {@code ~/.streamhouse/token.json} (readable by the
- * user only) and refreshed with the refresh token when they expire.
+ * Tokens and API calls. Tokens come from Keycloak through quarkus-oidc-client (password, device
+ * code, refresh) and are kept in {@code ~/.streamhouse/token.json}, readable by the user only;
+ * {@code SHCTL_TOKEN} overrides them. API calls go through typed REST clients.
  */
 final class Session {
 
     static final String CLIENT_ID = "shctl";
     private static final Path TOKEN_FILE = Path.of(System.getProperty("user.home"), ".streamhouse", "token.json");
+    private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private final ObjectMapper mapper = new ObjectMapper();
     private final Endpoints endpoints;
+    private final OidcClients oidc;
 
-    Session(Endpoints endpoints) {
+    Session(Endpoints endpoints, OidcClients oidc) {
         this.endpoints = endpoints;
-    }
-
-    ObjectMapper mapper() {
-        return mapper;
+        this.oidc = oidc;
     }
 
     // ---- tokens -------------------------------------------------------------------------------
 
-    JsonNode tokenRequest(Map<String, String> form) {
-        String body = form.entrySet().stream()
-                .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8) + "=" + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
-                .collect(Collectors.joining("&"));
-        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoints.issuer + "/protocol/openid-connect/token"))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString(body))
-                .build();
-        return send(request);
+    /** An OIDC client for the shctl public client with the given grant. */
+    OidcClient client(OidcClientConfig.Grant.Type grant, Map<String, String> grantOptions) {
+        OidcClientConfigBuilder config = OidcClientConfig.builder()
+                .id(CLIENT_ID + "-" + grant.name().toLowerCase())
+                .authServerUrl(endpoints.issuer)
+                .clientId(CLIENT_ID)
+                .grant(grant);
+        if (!grantOptions.isEmpty()) {
+            config.grantOptions(grant.name().toLowerCase(), grantOptions);
+        }
+        try {
+            return oidc.newClient(config.build()).await().atMost(TIMEOUT);
+        } catch (RuntimeException e) {
+            throw new CliException("cannot reach " + endpoints.issuer + " (" + e.getMessage() + ")");
+        }
     }
 
-    JsonNode deviceAuthorization() {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoints.issuer + "/protocol/openid-connect/auth/device"))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString("client_id=" + CLIENT_ID + "&scope=openid"))
-                .build();
-        return send(request);
+    Tokens await(io.smallrye.mutiny.Uni<Tokens> tokens) {
+        return tokens.await().atMost(TIMEOUT);
     }
 
-    void saveTokens(JsonNode tokens) {
-        ObjectNode saved = tokens.deepCopy();
-        saved.put("expires_at", Instant.now().plusSeconds(tokens.path("expires_in").asLong(60) - 10).getEpochSecond());
+    /** The device authorization request (RFC 8628 step 1): user code, verification URL, device code. */
+    JsonNode authorizeDevice() {
+        DeviceAuthorizationApi api = QuarkusRestClientBuilder.newBuilder().baseUri(URI.create(endpoints.issuer))
+                .build(DeviceAuthorizationApi.class);
+        return call(endpoints.issuer, () -> api.authorize(CLIENT_ID, "openid"));
+    }
+
+    void saveTokens(Tokens tokens) {
+        ObjectNode saved = mapper.createObjectNode();
+        saved.put("access_token", tokens.getAccessToken());
+        saved.put("refresh_token", tokens.getRefreshToken());
+        Long expiresAt = tokens.getAccessTokenExpiresAt();
+        saved.put("expires_at", expiresAt == null ? Instant.now().plusSeconds(60).getEpochSecond() : expiresAt - 10);
         saved.put("issuer", endpoints.issuer);
         try {
             Files.createDirectories(TOKEN_FILE.getParent());
@@ -92,60 +107,76 @@ final class Session {
             if (Instant.now().getEpochSecond() < saved.path("expires_at").asLong()) {
                 return saved.path("access_token").asText();
             }
-            JsonNode refreshed = tokenRequest(Map.of("grant_type", "refresh_token", "client_id", CLIENT_ID,
-                    "refresh_token", saved.path("refresh_token").asText()));
+            Tokens refreshed = await(client(OidcClientConfig.Grant.Type.REFRESH, Map.of())
+                    .refreshTokens(saved.path("refresh_token").asText()));
             saveTokens(refreshed);
-            return refreshed.path("access_token").asText();
-        } catch (IOException | CliException e) {
+            return refreshed.getAccessToken();
+        } catch (IOException | RuntimeException e) {
             throw new CliException("session expired; run: shctl login");
         }
     }
 
     // ---- API calls ----------------------------------------------------------------------------
 
-    JsonNode post(String baseUrl, String path, Object body) {
-        try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                    .header("Authorization", "Bearer " + accessToken())
-                    .header("Content-Type", "application/json")
-                    .timeout(Duration.ofSeconds(60))
-                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
-                    .build();
-            return send(request);
-        } catch (IOException e) {
-            throw new CliException(e.getMessage());
-        }
+    JsonNode sql(String sql) {
+        ControlPlaneApi api = api(endpoints.server, ControlPlaneApi.class);
+        return call(endpoints.server, () -> api.sql(bearer(), Map.of("sql", sql)));
     }
 
-    JsonNode get(String baseUrl, String path) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                .header("Authorization", "Bearer " + accessToken())
-                .timeout(Duration.ofSeconds(30))
-                .GET()
-                .build();
-        return send(request);
+    JsonNode resources(String kind) {
+        ControlPlaneApi api = api(endpoints.server, ControlPlaneApi.class);
+        return call(endpoints.server, () -> api.resources(bearer(), kind));
     }
 
-    private JsonNode send(HttpRequest request) {
+    JsonNode query(String sql) {
+        ContextEngineApi api = api(endpoints.contextEngine, ContextEngineApi.class);
+        return call(endpoints.contextEngine, () -> api.query(bearer(), Map.of("query", sql)));
+    }
+
+    private String bearer() {
+        return "Bearer " + accessToken();
+    }
+
+    private static <T> T api(String baseUrl, Class<T> type) {
+        return QuarkusRestClientBuilder.newBuilder().baseUri(URI.create(baseUrl)).build(type);
+    }
+
+    /** Runs a REST call and turns HTTP and connection errors into CLI messages. */
+    private <T> T call(String target, Supplier<T> request) {
         try {
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
-            JsonNode body = response.body() == null || response.body().isBlank() ? mapper.createObjectNode() : mapper.readTree(response.body());
-            if (response.statusCode() >= 400) {
-                String message = body.has("error_description") ? body.get("error_description").asText()
-                        : body.has("error") ? body.get("error").asText() : response.body();
-                if (response.statusCode() == 401) {
-                    message = "not authenticated (" + message + "); run: shctl login";
-                } else if (response.statusCode() == 403) {
-                    message = "forbidden: " + message;
-                }
-                throw new CliException(message, body);
+            return request.get();
+        } catch (WebApplicationException e) {
+            int status = e.getResponse().getStatus();
+            JsonNode body = readBody(e);
+            String message = body.has("error_description") ? body.get("error_description").asText()
+                    : body.has("error") ? body.get("error").asText() : "HTTP " + status;
+            if (status == 401) {
+                message = "not authenticated (" + message + "); run: shctl login";
+            } else if (status == 403) {
+                message = "forbidden: " + message;
+            } else if (body.has("line")) {
+                message = "syntax error at " + message;
             }
-            return body;
-        } catch (IOException e) {
-            throw new CliException("cannot reach " + request.uri().getHost() + ":" + request.uri().getPort() + " (" + e.getMessage() + ")");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new CliException("interrupted");
+            throw new CliException(message, body);
+        } catch (ProcessingException e) {
+            throw new CliException("cannot reach " + target + " (" + rootMessage(e) + ")");
         }
+    }
+
+    private JsonNode readBody(WebApplicationException e) {
+        try {
+            String text = e.getResponse().readEntity(String.class);
+            return text == null || text.isBlank() ? mapper.createObjectNode() : mapper.readTree(text);
+        } catch (RuntimeException | IOException notJson) {
+            return mapper.createObjectNode();
+        }
+    }
+
+    private static String rootMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage() == null ? root.toString() : root.getMessage();
     }
 }

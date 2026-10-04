@@ -94,7 +94,7 @@ public class DesiredState {
                 return ApplyOutcome.UNCHANGED;
             }
             // Changed, re-created after a drop, or re-applied after a failure (which retries it).
-            if (!current.deleted() && !orReplace) {
+            if (!current.deleted() && !orReplace && !current.resource().equals(resource)) {
                 throw new ConflictException(label(resource) + " already exists; use CREATE OR REPLACE to change it");
             }
             execute(c, """

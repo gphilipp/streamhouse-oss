@@ -14,6 +14,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.streamhouseoss.controlplane.clients.KafkaTopics;
 import org.streamhouseoss.controlplane.reconcile.ReconcileLoop;
+import org.streamhouseoss.controlplane.state.DesiredState;
+import org.streamhouseoss.controlplane.state.Phase;
+import org.streamhouseoss.model.ResourceKind;
 
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.common.QuarkusTestResource;
@@ -21,6 +24,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.security.TestSecurity;
 import io.restassured.http.ContentType;
 import io.restassured.path.json.JsonPath;
+import jakarta.inject.Inject;
 
 /**
  * The SQL API against a real desired-state database. The reconcile loop is mocked: these tests
@@ -41,6 +45,9 @@ class SqlApiTest {
 
     @InjectMock
     ReconcileLoop loop;
+
+    @Inject
+    DesiredState state;
 
     /** No Kafka here: topics that no declared resource produces are reported as missing. */
     @InjectMock
@@ -79,6 +86,10 @@ class SqlApiTest {
         JsonPath changed = sql("CREATE SOURCE shop FROM CONNECTION shop_pg TABLES (public.orders)");
         assertThat(changed.getBoolean("ok")).isFalse();
         assertThat(changed.getString("results[0].message")).contains("already exists; use CREATE OR REPLACE");
+
+        // Re-applying an identical statement for a failed resource retries it without OR REPLACE.
+        state.setStatus(ResourceKind.SOURCE, "shop", Phase.FAILED, "boom", 1, Map.of());
+        assertThat(sql(SOURCE).getString("results[0].message")).isEqualTo("source shop updated");
 
         assertThat(sql("CREATE OR REPLACE SOURCE shop FROM CONNECTION shop_pg TABLES (public.customers, public.orders, public.products)")
                 .getString("results[0].message")).isEqualTo("source shop updated");

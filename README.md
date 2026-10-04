@@ -54,29 +54,27 @@ Everything is Apache 2.0, except PostgreSQL, which uses the permissive PostgreSQ
 
 | Path | What it is |
 |---|---|
-| `sql/` | Parser for the streamhouse DDL |
-| `model/` | Resource model shared by all services |
+| `sql/` | The streamhouse DDL as an extension of Apache Calcite's SQL parser, and the resource model it produces |
 | `control-plane/` | Quarkus service. Stores desired state in Postgres; reconcilers drive Kafka, Connect, Flink, Gravitino and the context engine |
 | `flink-catalog/` | Flink catalog exposing Kafka topics as tables ([details](docs/flink-topic-catalog.md)) |
 | `context-engine/` | Quarkus service. Exactly-once topic → Postgres materialization, lightning queries (a safe single-table SQL subset compiled with Apache Calcite), MCP server |
 | `cli/` | `shctl`: login, `sql -f`, `get`, `describe`, `query` |
 | `deploy/compose/` | The whole platform for a laptop (see its [README](deploy/compose/README.md) and [conventions](deploy/compose/CONVENTIONS.md)) |
-| `examples/ecommerce/` | Demo shop database, pipeline and order generator ([walkthrough](examples/ecommerce/README.md)) |
+| `demos/shop-assistant/` | The e-commerce demo: shop database, native `sql/pipeline.sql`, and a Python app that runs unchanged on this platform and on Confluent Cloud ([README](demos/shop-assistant/README.md)) |
 | `e2e/` | End-to-end checks against the running platform |
-| `demos/shop-assistant/` | A Python demo that runs unchanged on this platform and on Confluent Cloud ([README](demos/shop-assistant/README.md)) |
 
 ## Quick start
 
-You need Java 21, Maven, and Docker with about 12 GB of memory (Colima, OrbStack or Docker Desktop).
+You need Java 21, Maven, and Docker with Compose and buildx, with about 12 GB of memory (Colima, OrbStack or Docker Desktop).
 
 ```bash
-make demo          # build, start the platform, log in as admin, apply examples/ecommerce/pipeline.sql
+make demo          # build, start the platform, log in as admin, apply demos/shop-assistant/sql/pipeline.sql
 make generate      # in another terminal: stream orders into the shop database
 bin/shctl get      # every resource should be READY
 bin/shctl query "SELECT * FROM customer_360 ORDER BY lifetime_value DESC LIMIT 5"
 ```
 
-Run `make e2e` to verify the whole flow: freshness, Iceberg, lineage, MCP, grants and audit. Run `make test` for the unit and integration tests.
+`make build up` starts the platform without applying a pipeline. With the platform running, `make e2e` verifies the whole flow: freshness, Iceberg, lineage, MCP, grants and audit. `make test` runs the unit and integration tests.
 
 ### Connect an AI agent
 
@@ -99,7 +97,7 @@ CREATE [OR REPLACE] CONNECTION name TYPE POSTGRES WITH (host = '…', port = '54
     user = '…', password = SECRET 'ref' [, publication = '…'])
 CREATE [OR REPLACE] SOURCE name FROM CONNECTION conn TABLES (schema.table, …)
 CREATE [OR REPLACE] MATERIALIZED VIEW name PRIMARY KEY (col, …) AS <Flink SQL query>
-CREATE [OR REPLACE] STATEMENT "name" AS <any Flink SQL statement, run in the topic catalog>
+CREATE [OR REPLACE] STATEMENT `name` AS <any Flink SQL statement, run in the topic catalog>
 ALTER TOPIC topic ENABLE ICEBERG [WITH (mode = 'upsert' | 'append')]
 ALTER TOPIC topic ENABLE CONTEXT [WITH (mode = 'upsert' | 'append', description = '…')]
 ALTER TOPIC topic DISABLE ICEBERG | CONTEXT
@@ -110,7 +108,9 @@ DESCRIBE CONNECTION | SOURCE | MATERIALIZED VIEW | STATEMENT | ICEBERG | CONTEXT
 ```
 
 Rules and behaviors:
-- **Topics:** a source writes one topic per table, `<source>.<schema>.<table>`; a view writes a topic named after itself. In view queries, quote dotted topic names with backticks.
+- **Names:** unquoted names are case-insensitive. Quote with backticks, as in Flink SQL, for dashes, upper case or reserved words (`` `customer-360` ``, `` `select` ``). Dotted topic names may be written unquoted: `ALTER TOPIC shop.public.orders …`.
+- **Topics:** a source writes one topic per table, `<source>.<schema>.<table>`. A materialized view is shorthand for ``CREATE TABLE `view` (PRIMARY KEY (…) NOT ENFORCED) WITH ('changelog.mode' = 'upsert') AS <query>``, so it writes a topic named after itself. In Flink SQL, quote dotted topic names with backticks.
+- **Raw keys:** a table created with `'key.format' = 'raw'` has a single `STRING` or `BYTES` key column named `key`, as on Confluent Cloud.
 - **Statements:** a statement runs in the topic catalog `streamhouse`.`local`. Statements that start a job (`INSERT INTO`, `CREATE TABLE … AS SELECT`) are kept running and resumed if their job stops; others (`ALTER TABLE …`) run once.
 - **Iceberg mode:** without `mode`, compacted topics become upsert tables and other topics append-only tables.
 - **Secrets:** `SECRET 'ref'` is resolved from the control plane's environment variable `STREAMHOUSE_SECRET_<REF>`. It is never stored.
@@ -122,7 +122,7 @@ Rules and behaviors:
 
 What works, verified by `make e2e` on a laptop:
 - CDC from Postgres.
-- Materialized views as Flink jobs.
+- Materialized views and statements as Flink jobs, with Kafka topics as Flink tables.
 - Topics continuously materialized as Iceberg tables: append and upsert.
 - The Context Engine: upsert and append modes, exactly-once offsets, schema evolution by added columns, REST and MCP.
 - OIDC, grants, audit and lineage.

@@ -52,6 +52,10 @@ h1 { font-family: var(--display); font-weight: 700; font-size: clamp(2rem, 4.5vw
 h2 { font-family: var(--display); font-weight: 600; font-size: 1.6rem; line-height: 1.2; margin: 0 0 12px; text-wrap: balance; }
 h3 { font-family: var(--display); font-weight: 600; font-size: 1.15rem; margin: 28px 0 8px; }
 p { margin: 0 0 14px; }
+.repo { margin: 0; font-size: 0.95rem; }
+a { color: var(--data); text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--data); outline-offset: 2px; border-radius: 2px; }
 .lede { font-size: 1.15rem; color: var(--muted); margin: 0; max-width: 62ch; }
 code { font-family: var(--mono); font-size: 0.86em; background: var(--data-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
 section { display: grid; gap: 4px; }
@@ -133,6 +137,7 @@ pre .chg { color: var(--new); font-weight: 500; }
     <div class="eyebrow">Architecture · milestone 1</div>
     <h1>Streamhouse OSS architecture</h1>
     <p class="lede">An open source streamhouse: operational data is captured as it changes, transformed continuously, and served both as Iceberg tables for analytics and as real-time context for applications and AI agents. Everything is declared in SQL and kept running by a control plane.</p>
+    <p class="repo"><a href="https://github.com/gphilipp/streamhouse-oss">View the source on GitHub</a> · Apache 2.0</p>
     <div class="facts" aria-label="Measured on the local stack">
       <div class="fact"><b>~1 s</b><span>Postgres commit → visible to agents</span></div>
       <div class="fact"><b>~10 s</b><span>Postgres commit → Iceberg snapshot</span></div>
@@ -593,7 +598,7 @@ pre .chg { color: var(--new); font-weight: 500; }
     </ul>
   </section>
 
-  <footer>Streamhouse OSS · github.com/gphilipp/streamhouse-oss · numbers measured on the local Docker Compose stack.</footer>
+  <footer>Streamhouse OSS · <a href="https://github.com/gphilipp/streamhouse-oss">github.com/gphilipp/streamhouse-oss</a> · numbers measured on the local Docker Compose stack.</footer>
 </main>
 
 <script>

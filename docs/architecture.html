@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Streamhouse OSS Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column (~70ch) with full-width figures and tables; data path in teal, control in dashed slate, new code in amber. */
+:root {
+  --bg: #f4f6f5;
+  --paper: #ffffff;
+  --ink: #18211e;
+  --muted: #56645f;
+  --rule: #d3dbd8;
+  --data: #0d6b61;
+  --data-soft: #e0efeb;
+  --control: #4b5873;
+  --new: #a8520e;
+  --new-soft: #fbebdd;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1513; --paper: #161e1b; --ink: #e5ebe8; --muted: #9caaa4; --rule: #2c3833;
+    --data: #52c4b2; --data-soft: #163029; --control: #a3b0cf; --new: #f0a565; --new-soft: #3a2716;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1513; --paper: #161e1b; --ink: #e5ebe8; --muted: #9caaa4; --rule: #2c3833;
+  --data: #52c4b2; --data-soft: #163029; --control: #a3b0cf; --new: #f0a565; --new-soft: #3a2716;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--body); font-size: 16px; line-height: 1.6;
+  padding-inline: 16px; padding-block: 40px 72px;
+}
+main { max-width: 1120px; margin: 0 auto; display: grid; gap: 56px; }
+.prose { max-width: 70ch; }
+header { display: grid; gap: 12px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--data); }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(2rem, 4.5vw, 3rem); line-height: 1.05; margin: 0; letter-spacing: -0.015em; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 1.6rem; line-height: 1.2; margin: 0 0 12px; text-wrap: balance; }
+h3 { font-family: var(--display); font-weight: 600; font-size: 1.15rem; margin: 28px 0 8px; }
+p { margin: 0 0 14px; }
+.lede { font-size: 1.15rem; color: var(--muted); margin: 0; max-width: 62ch; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--data-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+section { display: grid; gap: 4px; }
+ul { margin: 0 0 14px; padding-left: 1.2em; }
+li { margin: 4px 0; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 8px; }
+.fact { border-top: 2px solid var(--data); padding-top: 8px; }
+.fact b { display: block; font-family: var(--display); font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fact span { color: var(--muted); font-size: 0.9rem; }
+
+figure { margin: 18px 0 0; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; }
+.scroll { overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; min-width: 760px; color: var(--ink); font-family: var(--body); }
+figcaption { margin-top: 12px; color: var(--muted); font-size: 0.92rem; max-width: 80ch; }
+.key { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+.key i { display: inline-block; width: 26px; height: 0; vertical-align: middle; margin-right: 6px; border-top: 2.5px solid var(--data); }
+.key i.ctl { border-top: 2px dashed var(--control); }
+.key i.new { width: 14px; height: 14px; border: 2px solid var(--new); background: var(--new-soft); border-radius: 3px; }
+
+.tablewrap { overflow-x: auto; margin-top: 10px; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; min-width: 760px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td .alt { color: var(--muted); }
+td.lic { font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
+.tag { font-family: var(--mono); font-size: 0.72rem; color: var(--new); border: 1px solid var(--new); border-radius: 4px; padding: 0 5px; margin-left: 6px; white-space: nowrap; }
+
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
+.two > div { min-width: 0; }
+footer { color: var(--muted); font-size: 0.88rem; border-top: 1px solid var(--rule); padding-top: 18px; }
+</style>
+</head>
+<body>
+
+<main>
+  <header>
+    <div class="eyebrow">Architecture · milestone 1</div>
+    <h1>Streamhouse OSS architecture</h1>
+    <p class="lede">An open source streamhouse: operational data is captured as it changes, transformed continuously, and served both as Iceberg tables for analytics and as real-time context for applications and AI agents. Everything is declared in SQL and kept running by a control plane.</p>
+    <div class="facts" aria-label="Measured on the local stack">
+      <div class="fact"><b>~1 s</b><span>Postgres commit → visible to agents</span></div>
+      <div class="fact"><b>~10 s</b><span>Postgres commit → Iceberg snapshot</span></div>
+      <div class="fact"><b>2–60 ms</b><span>point lookup over REST or MCP</span></div>
+      <div class="fact"><b>Apache 2.0</b><span>every component, Postgres aside</span></div>
+    </div>
+  </header>
+
+  <section>
+    <div class="prose">
+      <h2>Overview</h2>
+      <p>The system follows the five streamhouse stages: <b>capture</b> changes from databases, <b>transport</b> them as ordered events, <b>transform</b> them continuously, <b>govern</b> who can see what and where it came from, and <b>serve</b> the current state.</p>
+      <p>Two planes keep the design simple. The <b>data plane</b> is made of established projects (Debezium, Kafka, Flink, Iceberg) connected only through Kafka topics. The <b>control plane</b> is new code: it stores what you declared in SQL and continuously reconciles every component towards it, so the same SQL script can be re-run safely and a crashed job comes back on its own.</p>
+    </div>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1100 500" role="img" aria-label="Data flows from the shop database through Debezium, Kafka and Flink, then to the context engine for agents and to Iceberg for analytics; the control plane configures each component.">
+          <defs>
+            <marker id="a-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--data)"/></marker>
+            <marker id="a-ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--control)"/></marker>
+          </defs>
+          <g font-size="13">
+            <!-- control row -->
+            <rect x="30" y="40" width="150" height="50" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="105" y="62" text-anchor="middle" font-weight="600" fill="currentColor">shctl · SQL API</text>
+            <text x="105" y="79" text-anchor="middle" font-size="11" fill="var(--muted)">people, CI, demo apps</text>
+
+            <rect x="300" y="30" width="300" height="70" rx="8" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+            <text x="450" y="58" text-anchor="middle" font-weight="700" font-size="15" fill="currentColor">Control plane</text>
+            <text x="450" y="78" text-anchor="middle" font-size="11.5" fill="var(--muted)">Calcite DDL · desired state · reconcilers</text>
+
+            <rect x="900" y="40" width="170" height="50" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="985" y="62" text-anchor="middle" font-weight="600" fill="currentColor">Keycloak</text>
+            <text x="985" y="79" text-anchor="middle" font-size="11" fill="var(--muted)">OIDC identities, roles</text>
+
+            <line x1="180" y1="65" x2="296" y2="65" stroke="currentColor" stroke-width="1.6" marker-end="url(#a-ctl)"/>
+            <text x="238" y="57" text-anchor="middle" font-size="11.5" fill="var(--muted)">SQL</text>
+            <line x1="898" y1="65" x2="604" y2="65" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a-ctl)"/>
+            <text x="750" y="57" text-anchor="middle" font-size="11.5" fill="var(--muted)">tokens, roles</text>
+
+            <!-- control bus -->
+            <path d="M450,100 V140" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none"/>
+            <path d="M245,140 H835" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none"/>
+            <path d="M245,140 V266" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#a-ctl)"/>
+            <path d="M425,140 V266" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#a-ctl)"/>
+            <path d="M620,140 V266" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#a-ctl)"/>
+            <path d="M835,140 V176" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#a-ctl)"/>
+            <text x="252" y="160" font-size="11" fill="var(--control)">connectors</text>
+            <text x="432" y="160" font-size="11" fill="var(--control)">topics</text>
+            <text x="627" y="160" font-size="11" fill="var(--control)">statements</text>
+            <text x="842" y="160" font-size="11" fill="var(--control)">enable, grants</text>
+            <path d="M985,90 V120 H900 V176" stroke="var(--control)" stroke-width="1.4" stroke-dasharray="5 4" fill="none" marker-end="url(#a-ctl)"/>
+            <text x="908" y="114" font-size="11" fill="var(--control)">API keys, JWKS</text>
+
+            <!-- data row -->
+            <rect x="20" y="270" width="120" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="80" y="296" text-anchor="middle" font-weight="600" fill="currentColor">Postgres</text>
+            <text x="80" y="314" text-anchor="middle" font-size="11" fill="var(--muted)">shop database</text>
+
+            <rect x="175" y="270" width="140" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="245" y="296" text-anchor="middle" font-weight="600" fill="currentColor">Kafka Connect</text>
+            <text x="245" y="314" text-anchor="middle" font-size="11" fill="var(--muted)">Debezium CDC</text>
+
+            <rect x="350" y="270" width="150" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="425" y="296" text-anchor="middle" font-weight="600" fill="currentColor">Kafka</text>
+            <text x="425" y="314" text-anchor="middle" font-size="11" fill="var(--muted)">+ Apicurio schemas</text>
+
+            <rect x="540" y="270" width="160" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="620" y="296" text-anchor="middle" font-weight="600" fill="currentColor">Flink 2.1</text>
+            <text x="620" y="314" text-anchor="middle" font-size="11" fill="var(--new)">topic catalog</text>
+
+            <rect x="750" y="180" width="170" height="60" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+            <text x="835" y="206" text-anchor="middle" font-weight="600" fill="currentColor">Context engine</text>
+            <text x="835" y="224" text-anchor="middle" font-size="11" fill="var(--muted)">Postgres serving store</text>
+
+            <rect x="750" y="380" width="170" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="835" y="406" text-anchor="middle" font-weight="600" fill="currentColor">Iceberg tables</text>
+            <text x="835" y="424" text-anchor="middle" font-size="11" fill="var(--muted)">S3 · Gravitino catalog</text>
+
+            <rect x="980" y="180" width="110" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="1035" y="206" text-anchor="middle" font-weight="600" fill="currentColor">Agents, apps</text>
+            <text x="1035" y="224" text-anchor="middle" font-size="11" fill="var(--muted)">Claude, services</text>
+
+            <rect x="980" y="380" width="110" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="1035" y="406" text-anchor="middle" font-weight="600" fill="currentColor">Analytics</text>
+            <text x="1035" y="424" text-anchor="middle" font-size="11" fill="var(--muted)">DuckDB, Trino</text>
+
+            <!-- data arrows -->
+            <g stroke="var(--data)" stroke-width="2.2" fill="none">
+              <line x1="140" y1="300" x2="171" y2="300" marker-end="url(#a-data)"/>
+              <line x1="315" y1="300" x2="346" y2="300" marker-end="url(#a-data)"/>
+              <line x1="500" y1="290" x2="536" y2="290" marker-end="url(#a-data)"/>
+              <path d="M600,330 V365 H440 V334" marker-end="url(#a-data)"/>
+              <path d="M470,270 V210 H746" marker-end="url(#a-data)"/>
+              <path d="M680,330 V410 H746" marker-end="url(#a-data)"/>
+              <line x1="920" y1="210" x2="976" y2="210" marker-end="url(#a-data)"/>
+              <line x1="920" y1="410" x2="976" y2="410" marker-end="url(#a-data)"/>
+            </g>
+            <g font-size="11" fill="var(--data)">
+              <text x="157" y="292" text-anchor="middle">WAL</text>
+              <text x="332" y="292" text-anchor="middle">rows</text>
+              <text x="518" y="283" text-anchor="middle">reads</text>
+              <text x="520" y="383" text-anchor="middle">writes derived topics</text>
+              <text x="540" y="203" text-anchor="middle">materializes, exactly once</text>
+              <text x="688" y="455">commits each checkpoint</text>
+              <text x="948" y="202" text-anchor="middle">MCP, REST</text>
+              <text x="948" y="402" text-anchor="middle">REST catalog</text>
+            </g>
+          </g>
+        </svg>
+      </div>
+      <figcaption>Teal arrows carry data; dashed arrows carry configuration. The control plane never sits on the data path: if it stops, data keeps flowing and queries keep working; only changes wait. It also registers the Kafka and Iceberg catalogs in Gravitino and records lineage for every edge drawn here.</figcaption>
+      <div class="key"><span><i></i>data path</span><span><i class="ctl"></i>control (configures, never carries data)</span><span><i class="new"></i>new code in this project</span></div>
+    </figure>
+  </section>
+
+
+  <section>
+    <div class="prose">
+      <h2>Capabilities and components</h2>
+      <p>Each of the five streamhouse capabilities is provided by one or more components. Four components serve two capabilities at once, which is why the stack has fewer parts than a one-tool-per-stage design would suggest.</p>
+    </div>
+    <figure>
+      <div class="scroll">
+<svg viewBox="0 0 1000 600" role="img" aria-label="The five streamhouse capabilities linked to the components that provide them. Apicurio, Flink, Gravitino and the context engine each contribute to two capabilities.">
+<g font-size="13">
+<path d="M250,50 C430,50 430,50 610,50" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,134 C430,134 430,106 610,106" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,134 C430,134 430,162 610,162" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,246 C430,246 430,218 610,218" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,246 C430,246 430,274 610,274" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,386 C430,386 430,162 610,162" fill="none" stroke="var(--control)" stroke-width="1.5" stroke-dasharray="5 4"/>
+<path d="M250,386 C430,386 430,330 610,330" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,386 C430,386 430,386 610,386" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,386 C430,386 430,442 610,442" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,386 C430,386 430,498 610,498" fill="none" stroke="var(--control)" stroke-width="1.5" stroke-dasharray="5 4"/>
+<path d="M250,520 C430,520 430,274 610,274" fill="none" stroke="var(--control)" stroke-width="1.5" stroke-dasharray="5 4"/>
+<path d="M250,520 C430,520 430,442 610,442" fill="none" stroke="var(--control)" stroke-width="1.5" stroke-dasharray="5 4"/>
+<path d="M250,520 C430,520 430,498 610,498" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<path d="M250,520 C430,520 430,554 610,554" fill="none" stroke="var(--data)" stroke-width="2.2"/>
+<rect x="30" y="18" width="220" height="64" rx="8" fill="var(--data-soft)" stroke="var(--data)" stroke-width="1.6"/>
+<text x="46" y="46" font-family="var(--display)" font-weight="700" font-size="17" fill="currentColor">Capture</text>
+<text x="46" y="66" font-size="11.5" fill="var(--muted)">changes from source systems</text>
+<rect x="30" y="102" width="220" height="64" rx="8" fill="var(--data-soft)" stroke="var(--data)" stroke-width="1.6"/>
+<text x="46" y="130" font-family="var(--display)" font-weight="700" font-size="17" fill="currentColor">Transport</text>
+<text x="46" y="150" font-size="11.5" fill="var(--muted)">durable, ordered events</text>
+<rect x="30" y="214" width="220" height="64" rx="8" fill="var(--data-soft)" stroke="var(--data)" stroke-width="1.6"/>
+<text x="46" y="242" font-family="var(--display)" font-weight="700" font-size="17" fill="currentColor">Transform</text>
+<text x="46" y="262" font-size="11.5" fill="var(--muted)">continuous SQL</text>
+<rect x="30" y="354" width="220" height="64" rx="8" fill="var(--data-soft)" stroke="var(--data)" stroke-width="1.6"/>
+<text x="46" y="382" font-family="var(--display)" font-weight="700" font-size="17" fill="currentColor">Govern</text>
+<text x="46" y="402" font-size="11.5" fill="var(--muted)">identity, access, schemas, lineage</text>
+<rect x="30" y="488" width="220" height="64" rx="8" fill="var(--data-soft)" stroke="var(--data)" stroke-width="1.6"/>
+<text x="46" y="516" font-family="var(--display)" font-weight="700" font-size="17" fill="currentColor">Serve</text>
+<text x="46" y="536" font-size="11.5" fill="var(--muted)">current state to apps, agents, analytics</text>
+<rect x="610" y="28" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="47" font-weight="600" fill="currentColor">Debezium on Kafka Connect</text>
+<text x="956" y="47" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="64" font-size="11" fill="var(--muted)">CDC from Postgres</text>
+<rect x="610" y="84" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="103" font-weight="600" fill="currentColor">Apache Kafka 4.3</text>
+<text x="956" y="103" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="120" font-size="11" fill="var(--muted)">topics, one per table and view</text>
+<rect x="610" y="140" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="159" font-weight="600" fill="currentColor">Apicurio Registry 3.3</text>
+<text x="956" y="159" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="176" font-size="11" fill="var(--muted)">Avro schemas · data contracts</text>
+<rect x="610" y="196" width="360" height="44" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+<text x="624" y="215" font-weight="600" fill="currentColor">Flink topic catalog</text>
+<text x="956" y="215" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="232" font-size="11" fill="var(--muted)">topics as tables, CTAS creates topics</text>
+<rect x="610" y="252" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="271" font-weight="600" fill="currentColor">Apache Flink 2.1</text>
+<text x="956" y="271" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="288" font-size="11" fill="var(--muted)">statements, views · writes Iceberg</text>
+<rect x="610" y="308" width="360" height="44" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+<text x="624" y="327" font-weight="600" fill="currentColor">Control plane</text>
+<text x="956" y="327" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="344" font-size="11" fill="var(--muted)">desired state, grants, lineage</text>
+<rect x="610" y="364" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="383" font-weight="600" fill="currentColor">Keycloak 26</text>
+<text x="956" y="383" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="400" font-size="11" fill="var(--muted)">OIDC identities, roles, API keys</text>
+<rect x="610" y="420" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="439" font-weight="600" fill="currentColor">Apache Gravitino 1.3</text>
+<text x="956" y="439" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="456" font-size="11" fill="var(--muted)">catalogs, lineage · Iceberg REST</text>
+<rect x="610" y="476" width="360" height="44" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+<text x="624" y="495" font-weight="600" fill="currentColor">Context engine</text>
+<text x="956" y="495" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="512" font-size="11" fill="var(--muted)">lightning queries, MCP · audit</text>
+<rect x="610" y="532" width="360" height="44" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+<text x="624" y="551" font-weight="600" fill="currentColor">Iceberg 1.12 on SeaweedFS</text>
+<text x="956" y="551" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">Apache 2.0</text>
+<text x="624" y="568" font-size="11" fill="var(--muted)">open tables on S3</text>
+</g></svg>
+      </div>
+      <figcaption>Solid links show a component's main capability; dashed links show a second one. Apicurio's schemas are both the transport format and the data contracts. Flink runs the transformations and also writes the Iceberg tables. Gravitino governs the catalogs and lineage and also serves the Iceberg REST catalog that analytics engines read through. The context engine serves agents and enforces grants and audit on every query.</figcaption>
+      <div class="key"><span><i></i>main capability</span><span><i class="ctl"></i>also contributes to</span><span><i class="new"></i>new code in this project</span><span>Licences shown at right; the context engine stores its data in PostgreSQL (PostgreSQL License).</span></div>
+    </figure>
+  </section>
+  <section class="prose">
+    <h2>How a change travels</h2>
+    <p>Take an order inserted into the shop database.</p>
+    <ol>
+      <li><b>Capture.</b> Debezium reads the Postgres write-ahead log and writes the new row to the topic <code>shop.public.orders</code>, keyed by the order id, as Avro registered in Apicurio. A delete becomes a tombstone. Topics are compacted, so they hold the latest row per key.</li>
+      <li><b>Transform.</b> Flink sees every topic as a table through the topic catalog. The statement behind <code>customer_360</code> joins customers with their orders and upserts one row per customer into the topic <code>customer_360</code>.</li>
+      <li><b>Serve to agents.</b> The context engine consumes <code>customer_360</code> and upserts it into a Postgres table, about a second after the original commit. An agent asks over MCP and gets the new totals.</li>
+      <li><b>Serve to analytics.</b> Another Flink job writes the same topic into an Iceberg table and commits on each checkpoint (every 10 s). Any engine that speaks the Iceberg REST catalog reads it.</li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>The control plane</h2>
+      <p>You describe the pipeline in SQL. The control plane parses it, stores it as desired state, and a reconcile loop drives each component towards it. Status and lineage flow back, and <code>shctl sql --wait</code> blocks until every resource is ready or has failed.</p>
+    </div>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1040 250" role="img" aria-label="A SQL statement is parsed by the Calcite-based parser, stored as desired state in Postgres, and applied by the reconcile loop to Kafka Connect, Flink, Gravitino and the context engine; status and lineage are written back.">
+          <defs>
+            <marker id="b-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+            <marker id="b-back" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--data)"/></marker>
+          </defs>
+          <g font-size="13">
+            <rect x="20" y="60" width="170" height="70" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="105" y="88" text-anchor="middle" font-family="var(--mono)" font-size="12" fill="currentColor">CREATE SOURCE …</text>
+            <text x="105" y="108" text-anchor="middle" font-size="11" fill="var(--muted)">script via shctl or API</text>
+
+            <rect x="240" y="60" width="170" height="70" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+            <text x="325" y="88" text-anchor="middle" font-weight="600" fill="currentColor">Calcite parser</text>
+            <text x="325" y="108" text-anchor="middle" font-size="11" fill="var(--muted)">roles checked, validated</text>
+
+            <rect x="460" y="60" width="190" height="70" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+            <text x="555" y="88" text-anchor="middle" font-weight="600" fill="currentColor">Desired state</text>
+            <text x="555" y="108" text-anchor="middle" font-size="11" fill="var(--muted)">statement + generation</text>
+
+            <rect x="700" y="60" width="170" height="70" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+            <text x="785" y="88" text-anchor="middle" font-weight="600" fill="currentColor">Reconcile loop</text>
+            <text x="785" y="108" text-anchor="middle" font-size="11" fill="var(--muted)">every 5 s and on change</text>
+
+            <g font-size="12" fill="currentColor">
+              <rect x="920" y="20" width="110" height="34" rx="6" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/><text x="975" y="42" text-anchor="middle">Kafka Connect</text>
+              <rect x="920" y="62" width="110" height="34" rx="6" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/><text x="975" y="84" text-anchor="middle">Flink gateway</text>
+              <rect x="920" y="104" width="110" height="34" rx="6" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/><text x="975" y="126" text-anchor="middle">Gravitino</text>
+              <rect x="920" y="146" width="110" height="34" rx="6" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/><text x="975" y="168" text-anchor="middle">Context engine</text>
+            </g>
+
+            <g stroke="currentColor" stroke-width="1.6" fill="none">
+              <line x1="190" y1="95" x2="236" y2="95" marker-end="url(#b-arrow)"/>
+              <line x1="410" y1="95" x2="456" y2="95" marker-end="url(#b-arrow)"/>
+              <line x1="650" y1="95" x2="696" y2="95" marker-end="url(#b-arrow)"/>
+              <path d="M870,95 H895 V37 H916" marker-end="url(#b-arrow)"/>
+              <line x1="895" y1="79" x2="916" y2="79" marker-end="url(#b-arrow)"/>
+              <path d="M895,95 V121 H916" marker-end="url(#b-arrow)"/>
+              <path d="M895,121 V163 H916" marker-end="url(#b-arrow)"/>
+            </g>
+            <path d="M785,130 V205 H555 V134" stroke="var(--data)" stroke-width="1.8" fill="none" marker-end="url(#b-back)"/>
+            <text x="670" y="222" text-anchor="middle" font-size="11.5" fill="var(--data)">status, lineage, observed generation</text>
+            <text x="555" y="155" text-anchor="middle" font-size="11" fill="var(--muted)">Postgres</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>A resource moves from PENDING to READY or FAILED. A failed resource is retried after 30 s, and re-applying the same statement retries it at once. Dropping a resource marks it deleted; the loop tears down dependents first, then purges it.</figcaption>
+    </figure>
+    <div class="two" style="margin-top:22px">
+      <div>
+        <h3>The SQL surface</h3>
+        <p>One script declares the whole pipeline: <code>CREATE CONNECTION</code>, <code>CREATE SOURCE</code>, <code>CREATE MATERIALIZED VIEW</code>, <code>CREATE STATEMENT</code> (any Flink SQL), <code>ALTER TOPIC … ENABLE ICEBERG | CONTEXT</code>, <code>GRANT</code>, plus <code>SHOW</code>, <code>DESCRIBE</code> and <code>DROP</code>. Embedded Flink SQL is kept verbatim and handed to Flink.</p>
+      </div>
+      <div>
+        <h3>One Flink path</h3>
+        <p>Every Flink job reads and writes topics through the topic catalog, so there is one definition of what a topic looks like as a table. A materialized view is shorthand for <code>CREATE TABLE … AS SELECT</code>. Jobs are named after a hash of their SQL: a changed definition gets a new job and the old one is cancelled.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>The context engine</h2>
+      <p>The context engine turns any topic with a schema into a table that agents can query in milliseconds. It writes each batch of records and the next Kafka offsets in the same Postgres transaction, so the table is exactly-once with respect to the topic: after a crash it resumes from the offsets stored with the data.</p>
+    </div>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 1000 230" role="img" aria-label="The materializer polls Kafka partitions, then writes rows and next offsets in one Postgres transaction; on restart it seeks to the stored offsets. Agents query the same tables through MCP or REST.">
+          <defs>
+            <marker id="c-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--data)"/></marker>
+            <marker id="c-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          </defs>
+          <g font-size="13">
+            <rect x="20" y="40" width="150" height="34" rx="6" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/><text x="95" y="62" text-anchor="middle" fill="currentColor">partition 0</text>
+            <rect x="20" y="84" width="150" height="34" rx="6" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/><text x="95" y="106" text-anchor="middle" fill="currentColor">partition 1</text>
+            <text x="95" y="28" text-anchor="middle" font-size="11" fill="var(--muted)">topic customer_360</text>
+
+            <rect x="240" y="50" width="180" height="60" rx="7" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.6"/>
+            <text x="330" y="76" text-anchor="middle" font-weight="600" fill="currentColor">Materializer</text>
+            <text x="330" y="94" text-anchor="middle" font-size="11" fill="var(--muted)">poll ≤ 100 ms, last per key</text>
+
+            <rect x="490" y="30" width="250" height="100" rx="8" fill="var(--paper)" stroke="var(--data)" stroke-width="1.6"/>
+            <text x="615" y="52" text-anchor="middle" font-size="11" font-family="var(--mono)" fill="var(--data)">ONE TRANSACTION</text>
+            <text x="615" y="78" text-anchor="middle" fill="currentColor">upsert rows / delete tombstones</text>
+            <text x="615" y="104" text-anchor="middle" fill="currentColor">store next offsets</text>
+
+            <rect x="810" y="50" width="170" height="60" rx="7" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.45"/>
+            <text x="895" y="76" text-anchor="middle" font-weight="600" fill="currentColor">Agents, apps</text>
+            <text x="895" y="94" text-anchor="middle" font-size="11" fill="var(--muted)">MCP tools, REST</text>
+
+            <g stroke="var(--data)" stroke-width="2" fill="none">
+              <path d="M170,57 H205 V80 H236" marker-end="url(#c-arrow)"/>
+              <path d="M170,101 H205 V80"/>
+              <line x1="420" y1="80" x2="486" y2="80" marker-end="url(#c-arrow)"/>
+            </g>
+            <line x1="806" y1="80" x2="744" y2="80" stroke="currentColor" stroke-width="1.6" marker-end="url(#c-ink)"/>
+            <text x="775" y="72" text-anchor="middle" font-size="11" fill="var(--muted)">SELECT</text>
+            <path d="M615,130 V180 H330 V114" stroke="currentColor" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#c-ink)"/>
+            <text x="472" y="198" text-anchor="middle" font-size="11.5" fill="var(--muted)">on restart: seek to stored offsets</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>Upsert mode keeps the latest row per key and applies tombstones as deletes; append mode keeps every record. New optional fields in a schema become new columns.</figcaption>
+    </figure>
+    <div class="prose" style="margin-top:22px">
+      <h3>Lightning queries and governance</h3>
+      <p>Agents get three MCP tools, <code>listTopics</code>, <code>getMetadata</code> and <code>queryData</code>. Queries are a single-table subset of SQL: filters, ordering, limits and simple aggregates. Apache Calcite parses and validates each query, which is then re-rendered against Postgres with every literal bound as a parameter, run read-only with a timeout.</p>
+      <p>Callers authenticate with an OIDC token or an API key and secret, which the engine exchanges for a token. A table is visible only to roles granted it, and every query, allowed or refused, is written to an audit table.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="prose">
+      <h2>Stack decisions</h2>
+      <p>Every choice favours a mature, Apache-licensed project over writing our own. New code exists only where no project covers the need, and is marked below.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Area</th><th>Choice</th><th>Licence</th><th>Considered</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Capture</td><td>Debezium 3.7 on Kafka Connect</td><td class="lic">Apache 2.0</td><td class="alt">Flink CDC, Debezium Server</td><td>The most widely used CDC engine. Running in Connect keeps change data in Kafka, where every other stage reads it, and the Connect REST API is easy to drive.</td></tr>
+          <tr><td>Transport</td><td>Apache Kafka 4.3 (KRaft)</td><td class="lic">Apache 2.0</td><td class="alt">Redpanda, Pulsar, Fluss</td><td>The broadest ecosystem, and the API Confluent also exposes, which keeps the demo portable. Redpanda was ruled out by its source-available licence.</td></tr>
+          <tr><td>Schemas</td><td>Apicurio Registry 3.3</td><td class="lic">Apache 2.0</td><td class="alt">Confluent Schema Registry, Karapace</td><td>Apache-licensed, with a Confluent-compatible API that Debezium, Flink and Python clients already speak. Gravitino has no schema registry.</td></tr>
+          <tr><td>Transform</td><td>Apache Flink 2.1 + SQL Gateway</td><td class="lic">Apache 2.0</td><td class="alt">Flink 1.20</td><td>The standard for continuous SQL. Version 2.1 was the newest with both Kafka and Iceberg connectors released.</td></tr>
+          <tr><td>Topics as tables</td><td>Flink topic catalog<span class="tag">new</span></td><td class="lic">Apache 2.0</td><td class="alt">Hand-written table DDL per job</td><td>Every topic is a table and <code>CREATE TABLE … AS SELECT</code> creates a topic, as in Confluent's Flink. One mapping from topic to table instead of one per job.</td></tr>
+          <tr><td>Lakehouse format</td><td>Apache Iceberg 1.12</td><td class="lic">Apache 2.0</td><td class="alt">Paimon, Fluss tiering</td><td>Readable by almost every engine through the REST catalog standard. Upsert tables use equality deletes.</td></tr>
+          <tr><td>Object storage</td><td>SeaweedFS (S3 API)</td><td class="lic">Apache 2.0</td><td class="alt">MinIO</td><td>MinIO stopped publishing community images; SeaweedFS is Apache-licensed and S3-compatible.</td></tr>
+          <tr><td>Catalog and lineage</td><td>Apache Gravitino 1.3</td><td class="lic">Apache 2.0</td><td class="alt">Polaris + Marquez, Lakekeeper</td><td>One metadata hub for Kafka and Iceberg, serving the Iceberg REST catalog and accepting OpenLineage events. It cannot return lineage, so the control plane also stores the lineage edges.</td></tr>
+          <tr><td>Identity</td><td>Keycloak 26 (OIDC)</td><td class="lic">Apache 2.0</td><td class="alt">Static API keys only</td><td>Standard tokens for people, services and agents, with roles in the token. API keys are Keycloak clients exchanged for tokens, matching how Confluent's MCP endpoint authenticates.</td></tr>
+          <tr><td>Real-time serving</td><td>Context engine on PostgreSQL 17<span class="tag">new</span></td><td class="lic">Apache 2.0; PostgreSQL License for Postgres</td><td class="alt">RocksDB, Fluss, Doris</td><td>No open source project materializes topics for agents over MCP. Postgres gives transactions (exactly-once offsets), indexes and SQL with nothing new to operate. The store can become pluggable later.</td></tr>
+          <tr><td>Query safety</td><td>Apache Calcite</td><td class="lic">Apache 2.0</td><td class="alt">Hand-written parser</td><td>A proven SQL parser to validate agent queries, so unsupported SQL is rejected before it reaches the database.</td></tr>
+          <tr><td>Pipeline definition</td><td>SQL DDL, Calcite parser extension<span class="tag">new</span></td><td class="lic">Apache 2.0</td><td class="alt">YAML resources, hand-written parser</td><td>SQL is what data engineers already write. Extending Calcite's grammar avoids maintaining a parser and gives proper error positions.</td></tr>
+          <tr><td>Services</td><td>Java 21 + Quarkus<span class="tag">new</span></td><td class="lic">Apache 2.0</td><td class="alt">Spring Boot, Go</td><td>Same JVM ecosystem as Kafka, Flink and Iceberg. Quarkus provides the REST server and client, OIDC, Flyway, scheduling and the MCP server, so little plumbing is hand-written.</td></tr>
+          <tr><td>Desired state</td><td>PostgreSQL, statements stored as written</td><td class="lic">PostgreSQL License</td><td class="alt">Kubernetes resources, etcd</td><td>Works the same on a laptop and in production. Storing the original SQL keeps it the single source of truth.</td></tr>
+          <tr><td>Local platform</td><td>Docker Compose</td><td class="lic">Apache 2.0</td><td class="alt">Kubernetes with Helm</td><td>Laptop first: <code>make demo</code> starts everything. Helm charts are on the roadmap.</td></tr>
+          <tr><td>Portability</td><td>Confluent's dialect on the data plane</td><td class="lic">Apache 2.0</td><td class="alt">Confluent-shaped control APIs</td><td>The demo app runs unchanged on both platforms. Only a small control adapter differs, and no Confluent product names are used.</td></tr>
+          <tr><td>Licence</td><td>Apache 2.0 for the project</td><td class="lic"></td><td class="alt"></td><td>Every component is Apache 2.0 except PostgreSQL, whose licence is similarly permissive.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="prose">
+    <h2>Repository map</h2>
+    <ul>
+      <li><code>sql/</code>: the streamhouse DDL (Calcite parser extension) and the resource model.</li>
+      <li><code>control-plane/</code>: desired state, reconcilers, lineage, the SQL API.</li>
+      <li><code>context-engine/</code>: materializers, lightning queries, MCP server, audit.</li>
+      <li><code>flink-catalog/</code>: the topic catalog, baked into the Flink image.</li>
+      <li><code>cli/</code>: <code>shctl</code>, for login, applying SQL, inspecting resources and querying.</li>
+      <li><code>deploy/compose/</code>: the whole platform for a laptop.</li>
+      <li><code>demos/shop-assistant/</code>: the e-commerce demo, as native SQL and as a Python app that also runs on Confluent Cloud.</li>
+      <li><code>e2e/</code>: end-to-end checks for freshness, Iceberg, lineage, MCP, grants and audit.</li>
+    </ul>
+  </section>
+
+  <section class="prose">
+    <h2>Known limits and next steps</h2>
+    <ul>
+      <li>Kafka runs without authentication on the internal network. Next: OAuth on Kafka with ACLs derived from grants.</li>
+      <li>One context engine instance. Next: partition assignment across instances, and a pluggable store.</li>
+      <li>Grants are enforced by the context engine and not yet pushed into Gravitino's access control.</li>
+      <li>A changed view query reprocesses its inputs from the start; new topic columns are not yet added to Iceberg tables.</li>
+      <li>Not yet built: Helm charts, a web UI, column masking and row filters.</li>
+    </ul>
+  </section>
+
+  <footer>Streamhouse OSS · github.com/gphilipp/streamhouse-oss · numbers measured on the local Docker Compose stack.</footer>
+</main>
+
+</body>
+</html>

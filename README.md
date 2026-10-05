@@ -25,6 +25,8 @@ GRANT SELECT ON CONTEXT customer_360 TO ROLE support_agent;
 
 ## Architecture
 
+The full write-up, with diagrams and the reasoning behind each stack choice, is in [docs/architecture.html](docs/architecture.html).
+
 | Stage | Technology | What this project adds |
 |---|---|---|
 | Capture | Debezium 3.7 on Kafka Connect | `CREATE CONNECTION` / `CREATE SOURCE` render and manage the connectors |

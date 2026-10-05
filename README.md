@@ -25,7 +25,7 @@ GRANT SELECT ON CONTEXT customer_360 TO ROLE support_agent;
 
 ## Architecture
 
-The full write-up, with diagrams and the reasoning behind each stack choice, is in [docs/architecture.html](docs/architecture.html).
+The full write-up, with diagrams, an animated walk-through of the demo and the reasoning behind each stack choice, is published at **https://gphilipp.github.io/streamhouse-oss/** (source: [docs/architecture.html](docs/architecture.html)).
 
 | Stage | Technology | What this project adds |
 |---|---|---|

@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Order's Journey</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: the pipeline diagram on top (animated packet travels the data path), a step rail on the left and the current step's record on the right below it. Same visual language as the architecture document: teal = data, amber = new code. */
+:root {
+  --bg: #f4f6f5;
+  --paper: #ffffff;
+  --ink: #18211e;
+  --muted: #56645f;
+  --rule: #d3dbd8;
+  --data: #0d6b61;
+  --data-soft: #e0efeb;
+  --new: #a8520e;
+  --new-soft: #fbebdd;
+  --code-bg: #eef2f1;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1513; --paper: #161e1b; --ink: #e5ebe8; --muted: #9caaa4; --rule: #2c3833;
+    --data: #52c4b2; --data-soft: #163029; --new: #f0a565; --new-soft: #3a2716; --code-bg: #111816;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1513; --paper: #161e1b; --ink: #e5ebe8; --muted: #9caaa4; --rule: #2c3833;
+  --data: #52c4b2; --data-soft: #163029; --new: #f0a565; --new-soft: #3a2716; --code-bg: #111816;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55;
+  padding-inline: 16px; padding-block: 32px 56px; }
+main { max-width: 1180px; margin: 0 auto; display: grid; gap: 22px; }
+header { display: grid; gap: 8px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--data); }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(1.8rem, 4vw, 2.6rem); line-height: 1.05; margin: 0; text-wrap: balance; }
+.links { margin: 0; font-size: 0.95rem; }
+a { color: var(--data); text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--data); outline-offset: 2px; border-radius: 2px; }
+.lede { margin: 0; color: var(--muted); max-width: 72ch; font-size: 1.05rem; }
+
+.stage { background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; display: grid; gap: 12px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.clock { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 1.35rem; font-weight: 500; color: var(--data); min-width: 9ch; }
+.clock small { display: block; font-size: 0.7rem; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; font-weight: 400; }
+.controls { display: flex; gap: 8px; margin-left: auto; }
+button { font: 500 0.9rem var(--body); color: var(--ink); background: var(--paper); border: 1px solid var(--rule);
+  border-radius: 7px; padding: 7px 14px; cursor: pointer; }
+button:hover { border-color: var(--data); }
+button:focus-visible, .steps button:focus-visible { outline: 2px solid var(--data); outline-offset: 2px; }
+button.primary { background: var(--data); border-color: var(--data); color: var(--paper); }
+.scroll { overflow-x: auto; }
+svg.flow { display: block; width: 100%; height: auto; min-width: 820px; color: var(--ink); font-family: var(--body); }
+svg .node rect { transition: stroke-width 0.25s, filter 0.25s; }
+svg .node.active rect.box { stroke: var(--data); stroke-width: 3; }
+svg .node.done rect.box { stroke: var(--data); stroke-opacity: 0.55; }
+
+.detail { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 760px) { .detail { grid-template-columns: 1fr; } }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; counter-reset: s; }
+.steps button { width: 100%; text-align: left; display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: baseline;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid transparent; background: transparent; font-weight: 400; }
+.steps button .n { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.steps button .t { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.steps button[aria-current="step"] { background: var(--data-soft); border-color: var(--data); font-weight: 600; }
+.steps button[aria-current="step"] .n { color: var(--data); }
+.card { background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; padding: 18px 20px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.card h2 { font-family: var(--display); font-weight: 600; font-size: 1.35rem; margin: 0; text-wrap: balance; }
+.where { font-family: var(--mono); font-size: 0.78rem; color: var(--new); text-transform: uppercase; letter-spacing: 0.06em; }
+.card p { margin: 0; max-width: 70ch; }
+pre { margin: 0; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; overflow-x: auto;
+  font: 0.82rem/1.55 var(--mono); }
+pre .k { color: var(--data); }
+pre .c { color: var(--muted); }
+pre .chg { color: var(--new); font-weight: 500; }
+.note { color: var(--muted); font-size: 0.85rem; }
+@media (prefers-reduced-motion: reduce) { svg .node rect { transition: none; } }
+</style>
+</head>
+<body>
+
+<main>
+  <header>
+    <div class="eyebrow">Shop assistant demo · data flow</div>
+    <h1>One order's journey through the streamhouse</h1>
+    <p class="lede">Customer 42 places an order. Follow the change from the shop database to the support agent, which can answer about it about a second later, and to the Iceberg table analysts read about ten seconds later.</p>
+    <p class="links"><a href="architecture.html">Read the architecture</a> · <a href="https://github.com/gphilipp/streamhouse-oss">View the source on GitHub</a></p>
+  </header>
+
+  <section class="stage" aria-label="Animated pipeline">
+    <div class="toolbar">
+      <div class="clock" aria-live="polite"><small>after the commit</small><span id="clock">0 ms</span></div>
+      <div class="controls">
+        <button id="prev" type="button">Back</button>
+        <button id="play" type="button" class="primary">Pause</button>
+        <button id="next" type="button">Next</button>
+        <button id="restart" type="button">Restart</button>
+      </div>
+    </div>
+    <div class="scroll">
+      <svg class="flow" viewBox="0 0 1180 330" role="img" aria-label="Pipeline of the demo: shop database, Debezium, topic shop.public.orders, Flink statement customer-360, topic customer_360, then the context engine and the support agent, and the Iceberg table and analytics.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--rule)"/></marker>
+          <filter id="glow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="3"/></filter>
+        </defs>
+
+        <!-- connectors; packets travel along these paths -->
+        <g fill="none" stroke="var(--rule)" stroke-width="2.5" marker-end="url(#arr)">
+          <path id="p1" d="M145,170 H178"/>
+          <path id="p2" d="M310,170 H343"/>
+          <path id="p3" d="M475,170 H508"/>
+          <path id="p4" d="M640,170 H673"/>
+          <path id="p5" d="M805,158 C828,158 826,70 848,70"/>
+          <path id="p6" d="M990,70 H1028"/>
+          <path id="p7" d="M805,182 C828,182 826,270 848,270"/>
+          <path id="p8" d="M990,270 H1028"/>
+        </g>
+        <g font-size="10.5" fill="var(--muted)" text-anchor="middle">
+          <text x="162" y="160">WAL</text>
+          <text x="492" y="160">reads</text>
+          <text x="1009" y="60">MCP</text>
+          <text x="1009" y="260">REST</text>
+        </g>
+
+        <g font-size="13">
+          <g class="node" id="n-db"><rect class="box" x="15" y="138" width="130" height="64" rx="8" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="80" y="165" text-anchor="middle" font-weight="600" fill="currentColor">shop-db</text>
+            <text x="80" y="184" text-anchor="middle" font-size="11" fill="var(--muted)">Postgres · orders</text></g>
+          <g class="node" id="n-dbz"><rect class="box" x="180" y="138" width="130" height="64" rx="8" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="245" y="165" text-anchor="middle" font-weight="600" fill="currentColor">Debezium</text>
+            <text x="245" y="184" text-anchor="middle" font-size="11" fill="var(--muted)">Kafka Connect</text></g>
+          <g class="node" id="n-orders"><rect class="box" x="345" y="138" width="130" height="64" rx="8" fill="var(--data-soft)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="410" y="163" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="currentColor">shop.public</text>
+            <text x="410" y="178" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="currentColor">.orders</text>
+            <text x="410" y="194" text-anchor="middle" font-size="10.5" fill="var(--muted)">Kafka topic</text></g>
+          <g class="node" id="n-flink"><rect class="box" x="510" y="138" width="130" height="64" rx="8" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="575" y="165" text-anchor="middle" font-weight="600" fill="currentColor">Flink</text>
+            <text x="575" y="184" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">customer-360</text></g>
+          <g class="node" id="n-c360"><rect class="box" x="675" y="138" width="130" height="64" rx="8" fill="var(--data-soft)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="740" y="170" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="currentColor">customer_360</text>
+            <text x="740" y="188" text-anchor="middle" font-size="10.5" fill="var(--muted)">Kafka topic</text></g>
+          <g class="node" id="n-ctx"><rect class="box" x="850" y="38" width="140" height="64" rx="8" fill="var(--new-soft)" stroke="var(--new)" stroke-opacity="0.8"/>
+            <text x="920" y="65" text-anchor="middle" font-weight="600" fill="currentColor">Context engine</text>
+            <text x="920" y="84" text-anchor="middle" font-size="11" fill="var(--muted)">Postgres serving</text></g>
+          <g class="node" id="n-agent"><rect class="box" x="1030" y="38" width="135" height="64" rx="8" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="1097" y="65" text-anchor="middle" font-weight="600" fill="currentColor">Support agent</text>
+            <text x="1097" y="84" text-anchor="middle" font-size="11" fill="var(--muted)">Claude</text></g>
+          <g class="node" id="n-ice"><rect class="box" x="850" y="238" width="140" height="64" rx="8" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="920" y="265" text-anchor="middle" font-weight="600" fill="currentColor">Iceberg table</text>
+            <text x="920" y="284" text-anchor="middle" font-size="11" fill="var(--muted)">lake.streamhouse</text></g>
+          <g class="node" id="n-ana"><rect class="box" x="1030" y="238" width="135" height="64" rx="8" fill="var(--paper)" stroke="currentColor" stroke-opacity="0.4"/>
+            <text x="1097" y="265" text-anchor="middle" font-weight="600" fill="currentColor">Analytics</text>
+            <text x="1097" y="284" text-anchor="middle" font-size="11" fill="var(--muted)">DuckDB report</text></g>
+        </g>
+
+        <g id="packets"></g>
+      </svg>
+    </div>
+  </section>
+
+  <section class="detail">
+    <ol class="steps" id="steps" aria-label="Steps"></ol>
+    <article class="card" id="card" aria-live="polite">
+      <div class="where" id="where"></div>
+      <h2 id="title"></h2>
+      <p id="text"></p>
+      <pre id="payload"></pre>
+    </article>
+  </section>
+  <p class="note">Times are typical of the local Docker Compose stack: a change reached the context engine in 0.7 to 1.4 s and Iceberg within one 10 s checkpoint. Values are illustrative, taken from the demo's seed data.</p>
+</main>
+
+<script>
+(() => {
+  const STEPS = [
+    {
+      time: "0 ms", where: "Capture · shop-db", title: "Customer 42 places an order",
+      text: "The shop application inserts an order. Postgres writes it to its write-ahead log, which Debezium reads through a replication slot.",
+      nodes: ["n-db"], paths: [],
+      payload: `<span class="k">INSERT INTO</span> orders (customer_id, status, total)
+<span class="k">VALUES</span> (42, 'open', 123.45);   <span class="c">-- order 1001, committed</span>`
+    },
+    {
+      time: "≈ 50 ms", where: "Capture → Transport · Debezium", title: "Debezium publishes the row change",
+      text: "Debezium turns the new row into a Kafka record keyed by the order id, encoded in Avro with its schema registered in Apicurio. The topic is compacted, so it always holds the latest version of each order.",
+      nodes: ["n-dbz", "n-orders"], paths: ["p1", "p2"],
+      payload: `<span class="c">topic</span>  shop.public.orders     <span class="c">schema id 4 (Avro)</span>
+<span class="k">key</span>    {"order_id": 1001}
+<span class="k">value</span>  {"order_id": 1001, "customer_id": 42, "status": "open",
+        "total": 123.45, "created_at": "2026-10-05T09:14:02.118Z"}`
+    },
+    {
+      time: "≈ 300 ms", where: "Transform · Flink statement customer-360", title: "Flink updates the customer's totals",
+      text: "The statement customer-360 reads the orders topic as a table. Its join and aggregation for customer 42 change, and Flink upserts the new row into the topic customer_360, keyed by the customer.",
+      nodes: ["n-flink", "n-c360"], paths: ["p3", "p4"],
+      payload: `<span class="c">topic</span>  customer_360           <span class="c">raw key, Avro value</span>
+<span class="k">key</span>    "42"
+<span class="k">value</span>  {"customer_id": 42, "name": "Grace Hamilton", "tier": "standard",
+        "orders": <span class="chg">5 → 6</span>, "open_orders": <span class="chg">2 → 3</span>,
+        "lifetime_value": <span class="chg">2609.22 → 2732.67</span>}`
+    },
+    {
+      time: "≈ 1 s", where: "Serve · context engine", title: "The context engine materializes the row",
+      text: "The context engine polls the topic and writes the new row and the next Kafka offset in one Postgres transaction. A crash can't lose or duplicate the change: on restart it resumes from the offset stored with the data.",
+      nodes: ["n-ctx"], paths: ["p5"],
+      payload: `<span class="k">BEGIN</span>;
+  <span class="k">INSERT INTO</span> serving."customer_360" (...) <span class="k">VALUES</span> (...)
+    <span class="k">ON CONFLICT</span> ("_key") <span class="k">DO UPDATE SET</span> orders = 6, open_orders = 3, ...;
+  <span class="k">UPDATE</span> serving._offsets <span class="k">SET</span> next_offset = 1338 <span class="k">WHERE</span> topic = 'customer_360';
+<span class="k">COMMIT</span>;`
+    },
+    {
+      time: "≈ 1 s + 6 ms", where: "Serve · MCP", title: "The support agent answers with the new order",
+      text: "A support agent asks Claude about customer 42. Claude calls the queryData tool over MCP, with an API key granted the support_agent role, and gets the row in milliseconds.",
+      nodes: ["n-agent"], paths: ["p6"],
+      payload: `<span class="c">queryData</span>  SELECT name, orders, open_orders, lifetime_value
+           FROM customer_360 WHERE customer_id = 42
+
+<span class="k">Claude:</span> Grace Hamilton has 6 orders, 3 of them open, and a
+        lifetime value of 2,732.67, including the order just placed.`
+    },
+    {
+      time: "≤ 10 s", where: "Serve · Iceberg", title: "The next checkpoint commits to Iceberg",
+      text: "In parallel, a Flink job copies customer_360 into an Iceberg upsert table. It commits a snapshot at each checkpoint, every 10 seconds; customer 42's previous row is replaced with an equality delete.",
+      nodes: ["n-ice"], paths: ["p7"],
+      payload: `<span class="c">table</span>     lake.streamhouse.customer_360   <span class="c">format v2, upsert</span>
+<span class="c">snapshot</span>  + 1 data file, + 1 equality delete (customer 42)
+<span class="c">catalog</span>   Gravitino Iceberg REST, files on S3 (SeaweedFS)`
+    },
+    {
+      time: "≤ 10 s", where: "Serve · analytics", title: "Analysts see the order in their reports",
+      text: "Any engine that speaks the Iceberg REST catalog reads the table. The demo's DuckDB report on revenue by tier now includes the new order.",
+      nodes: ["n-ana"], paths: ["p8"],
+      payload: `<span class="k">SELECT</span> tier, count(*) AS customers, sum(lifetime_value) AS revenue
+<span class="k">FROM</span> lake.streamhouse.customer_360 <span class="k">GROUP BY</span> tier;
+
+tier      customers  revenue
+standard  35         <span class="chg">76,543.02</span>   <span class="c">+123.45</span>`
+    },
+  ];
+
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const TRAVEL_MS = 900, HOLD_MS = 2600;
+  const $ = (id) => document.getElementById(id);
+  const packets = $("packets");
+  const NS = "http://www.w3.org/2000/svg";
+  let index = 0, playing = !reduce, timer = null, raf = null;
+
+  // Step rail
+  const rail = $("steps");
+  STEPS.forEach((s, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = `<span class="n">${i + 1}</span><span>${s.title}</span><span class="t">${s.time}</span>`;
+    b.addEventListener("click", () => { show(i); });
+    li.appendChild(b);
+    rail.appendChild(li);
+  });
+
+  function packet() {
+    const g = document.createElementNS(NS, "g");
+    const halo = document.createElementNS(NS, "circle");
+    halo.setAttribute("r", "11"); halo.setAttribute("fill", "var(--data)"); halo.setAttribute("opacity", "0.35"); halo.setAttribute("filter", "url(#glow)");
+    const dot = document.createElementNS(NS, "circle");
+    dot.setAttribute("r", "6.5"); dot.setAttribute("fill", "var(--data)"); dot.setAttribute("stroke", "var(--paper)"); dot.setAttribute("stroke-width", "2");
+    g.append(halo, dot);
+    packets.appendChild(g);
+    return g;
+  }
+
+  function place(g, path, t) {
+    const len = path.getTotalLength();
+    const p = path.getPointAtLength(len * t);
+    g.setAttribute("transform", `translate(${p.x},${p.y})`);
+  }
+
+  function setNodes(i) {
+    document.querySelectorAll("svg .node").forEach((n) => n.classList.remove("active", "done"));
+    STEPS.slice(0, i).forEach((s) => s.nodes.forEach((id) => $(id).classList.add("done")));
+    STEPS[i].nodes.forEach((id) => $(id).classList.add("active"));
+  }
+
+  function setCard(i) {
+    const s = STEPS[i];
+    $("clock").textContent = s.time;
+    $("where").textContent = s.where;
+    $("title").textContent = s.title;
+    $("text").textContent = s.text;
+    $("payload").innerHTML = s.payload;
+    rail.querySelectorAll("button").forEach((b, j) => {
+      if (j === i) { b.setAttribute("aria-current", "step"); } else { b.removeAttribute("aria-current"); }
+    });
+  }
+
+  function travel(paths, done) {
+    cancelAnimationFrame(raf);
+    packets.replaceChildren();
+    if (!paths.length) { done(); return; }
+    const els = paths.map((id) => $(id));
+    const g = packet();
+    if (reduce) { place(g, els[els.length - 1], 1); done(); return; }
+    const start = performance.now();
+    const total = TRAVEL_MS * els.length;
+    const tick = (now) => {
+      const elapsed = Math.min(now - start, total);
+      const seg = Math.min(Math.floor(elapsed / TRAVEL_MS), els.length - 1);
+      const t = (elapsed - seg * TRAVEL_MS) / TRAVEL_MS;
+      const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      place(g, els[seg], Math.min(eased, 1));
+      if (elapsed < total) { raf = requestAnimationFrame(tick); } else { done(); }
+    };
+    raf = requestAnimationFrame(tick);
+  }
+
+  function show(i) {
+    clearTimeout(timer);
+    index = (i + STEPS.length) % STEPS.length;
+    setCard(index);
+    setNodes(index);
+    travel(STEPS[index].paths, () => {
+      if (playing) { timer = setTimeout(() => show(index + 1), HOLD_MS); }
+    });
+  }
+
+  function setPlaying(p) {
+    playing = p;
+    $("play").textContent = p ? "Pause" : "Play";
+    clearTimeout(timer);
+    if (p) { timer = setTimeout(() => show(index + 1), 600); }
+  }
+
+  $("play").addEventListener("click", () => setPlaying(!playing));
+  $("next").addEventListener("click", () => { setPlaying(false); show(index + 1); });
+  $("prev").addEventListener("click", () => { setPlaying(false); show(index - 1); });
+  $("restart").addEventListener("click", () => { show(0); if (!playing) setPlaying(true); });
+
+  if (reduce) { $("play").textContent = "Play"; }
+  show(0);
+})();
+</script>
+
+</body>
+</html>
